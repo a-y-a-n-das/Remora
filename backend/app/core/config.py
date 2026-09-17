@@ -1,0 +1,51 @@
+import os
+from functools import lru_cache
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore",
+    )
+
+    AWS_REGION: str = Field(default="us-east-1")
+
+    S3_BUCKET: str = Field(default="")
+
+    MAX_FILE_SIZE_MB: int = Field(default=10)
+    MAX_FILES_PER_REQUEST: int = Field(default=5)
+    RATE_LIMIT_UPLOADS: int = Field(default=20)
+    MAX_TOTAL_STORAGE_GB: int = Field(default=10)
+
+    ADMIN_USERNAME: str = Field(default="admin")
+    ADMIN_PASSWORD: str = Field(default="")
+
+    ALLOWED_MIME_TYPES: list[str] = Field(
+        default=[
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+            "image/gif",
+            "image/heic",
+            "image/heif",
+        ]
+    )
+
+    PRESIGNED_URL_EXPIRY_SECONDS: int = Field(default=3600)
+
+    ALLOWED_ORIGINS: list[str] = Field(default=["*"])
+
+    LOG_LEVEL: str = Field(default="INFO")
+
+    @property
+    def max_file_size_bytes(self) -> int:
+        return self.MAX_FILE_SIZE_MB * 1024 * 1024
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
