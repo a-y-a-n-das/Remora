@@ -22,3 +22,14 @@ def get_async_s3_client():
 
     session = aiobotocore.session.get_session()
     return session.create_client("s3", config=get_boto3_config())
+
+
+def get_sqs_client():
+    return boto3.client("sqs", config=get_boto3_config())
+
+
+def get_async_sqs_client():
+    import aiobotocore.session
+
+    session = aiobotocore.session.get_session()
+    return session.create_client("sqs", config=get_boto3_config())
