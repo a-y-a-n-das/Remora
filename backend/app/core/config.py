@@ -39,6 +39,12 @@ class Settings(BaseSettings):
 
     ALLOWED_ORIGINS: list[str] = Field(default=["*"])
 
+    # SQS
+    SQS_QUEUE_URL: str = Field(default="")
+    SQS_MAX_MESSAGES: int = Field(default=1)
+    SQS_WAIT_TIME_SECONDS: int = Field(default=20)
+    SQS_VISIBILITY_TIMEOUT_SECONDS: int = Field(default=300)
+
     LOG_LEVEL: str = Field(default="INFO")
 
     @property
