@@ -4,6 +4,8 @@ __pycache__/
 *.pyo
 *.pyd
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .venv/
 venv/
 env/
@@ -11,13 +13,22 @@ env/
 dist/
 build/
 
-# Environment
+# Node / frontend
+node_modules/
+dist/
+.vite/
+.npm/
+*.tsbuildinfo
+
+# Environment / secrets
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # IDE
-.vscode/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
 .idea/
 *.swp
 *.swo
@@ -25,6 +36,9 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Demo frontend (reference only)
+demo_frontend/
 
 # Logs
 *.log
@@ -34,3 +48,7 @@ logs/
 htmlcov/
 .coverage
 .coverage.*
+coverage/
+
+# Build output
+*.tsbuildinfo
