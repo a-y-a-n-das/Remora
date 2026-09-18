@@ -96,14 +96,14 @@ class TestS3EventRecordExtraction:
             "eventTime": "2024-01-15T10:30:00.000Z",
             "eventName": "ObjectCreated:Put",
             "s3": {
-                "bucket": {"name": "remora-memories"},
+                "bucket": {"name": "remora-memory"},
                 "object": {"key": "memories/mem_abc123def456/original.jpg", "size": 1024}
             }
         }
         event = extract_s3_event_record(record, "msg-123")
 
         assert event.message_id == "msg-123"
-        assert event.bucket == "remora-memories"
+        assert event.bucket == "remora-memory"
         assert event.key == "memories/mem_abc123def456/original.jpg"
         assert event.event_name == "ObjectCreated:Put"
         assert event.memory_id == "mem_abc123def456"
