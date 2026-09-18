@@ -1,6 +1,8 @@
 import asyncio
+import sys
 import time
-from app.core.aws_clients import get_async_sqs_client
+from typing import Optional
+from app.core.aws_clients import get_async_sqs_client, get_async_s3_client
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.workers.s3_events import (
@@ -8,37 +10,99 @@ from app.workers.s3_events import (
     S3EventRecord,
     S3EventParseError,
 )
+from app.services import (
+    textract_service,
+    bedrock_embedding_service,
+    opensearch_service,
+)
 
 logger = get_logger(__name__)
 
 
+class ProcessingError(Exception):
+    def __init__(self, message: str, retryable: bool = True):
+        self.retryable = retryable
+        super().__init__(message)
+
+
+async def download_image_from_s3(s3_bucket: str, s3_key: str) -> Optional[bytes]:
+    settings = get_settings()
+    client = get_async_s3_client()
+    async with client as s3:
+        try:
+            response = await s3.get_object(Bucket=s3_bucket, Key=s3_key)
+            return await response["Body"].read()
+        except Exception as e:
+            logger.error("s3_download_failed", s3_key=s3_key, error=str(e))
+            return None
+
+
 async def process_memory_event(event: S3EventRecord) -> bool:
+    memory_id = event.memory_id
+    s3_bucket = event.bucket
+    s3_key = event.key
+
     start_time = time.time()
     logger.info(
         "processing_started",
-        memory_id=event.memory_id,
-        bucket=event.bucket,
-        key=event.key,
+        memory_id=memory_id,
+        bucket=s3_bucket,
+        key=s3_key,
         event_name=event.event_name,
     )
 
     try:
-        await asyncio.sleep(0.1)
+        opensearch_service.update_memory_status(memory_id, "processing")
 
+        image_bytes = await download_image_from_s3(s3_bucket, s3_key)
+        if not image_bytes:
+            raise ProcessingError("Failed to download image from S3", retryable=True)
+
+        ocr_text = textract_service.extract_text(s3_bucket, s3_key)
+
+        embedding = bedrock_embedding_service.get_multimodal_embedding(
+            s3_bucket, s3_key, ocr_text
+        )
+
+        document = {
+            "memory_id": memory_id,
+            "s3_key": s3_key,
+            "file": {
+                "original_filename": s3_key.split("/")[-1],
+                "mime_type": "image/unknown",
+                "size_bytes": len(image_bytes),
+            },
+            "time": {
+                "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "captured_at": None,
+            },
+            "text": {"ocr": ocr_text or ""},
+            "embedding": embedding or [],
+            "processing": {"status": "ready", "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+            "moderation": {"status": "approved", "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+        }
+
+        success = opensearch_service.index_memory(document)
+        if not success:
+            raise ProcessingError("Failed to index memory in OpenSearch", retryable=True)
+
+        duration_ms = int((time.time() - start_time) * 1000)
         logger.info(
-            "placeholder_processing_completed",
-            memory_id=event.memory_id,
-            duration_ms=int((time.time() - start_time) * 1000),
+            "processing_completed",
+            memory_id=memory_id,
+            has_ocr=bool(ocr_text),
+            has_embedding=bool(embedding),
+            duration_ms=duration_ms,
         )
         return True
 
+    except ProcessingError:
+        opensearch_service.update_memory_status(memory_id, "failed", error_message=str(sys.exc_info()[1]))
+        raise
     except Exception as e:
-        logger.error(
-            "processing_failed",
-            memory_id=event.memory_id,
-            error=str(e),
-            duration_ms=int((time.time() - start_time) * 1000),
-        )
+        duration_ms = int((time.time() - start_time) * 1000)
+        logger.error("processing_failed", memory_id=memory_id, error=str(e), duration_ms=duration_ms)
+        opensearch_service.update_memory_status(memory_id, "failed", error_message=str(e))
         return False
 
 
@@ -48,6 +112,9 @@ async def run_worker():
     if not settings.SQS_QUEUE_URL:
         logger.error("SQS_QUEUE_URL not configured, worker cannot start")
         return
+
+    if not opensearch_service.is_available():
+        logger.warning("OpenSearch not configured, worker will fail on indexing")
 
     logger.info(
         "worker_starting",
@@ -94,9 +161,20 @@ async def run_worker():
 
                     all_processed = True
                     for event in event_records:
-                        success = await process_memory_event(event)
-                        if not success:
-                            all_processed = False
+                        try:
+                            success = await process_memory_event(event)
+                            if not success:
+                                all_processed = False
+                        except ProcessingError as e:
+                            if e.retryable:
+                                all_processed = False
+                            else:
+                                logger.warning(
+                                    "non_retryable_error_deleting_message",
+                                    message_id=message_id,
+                                    memory_id=event.memory_id,
+                                    error=str(e),
+                                )
 
                     if all_processed:
                         await client.delete_message(
