@@ -45,6 +45,19 @@ class Settings(BaseSettings):
     SQS_WAIT_TIME_SECONDS: int = Field(default=20)
     SQS_VISIBILITY_TIMEOUT_SECONDS: int = Field(default=300)
 
+    # Textract
+    TEXTRACT_MAX_RETRIES: int = Field(default=3)
+
+    # Bedrock
+    BEDROCK_EMBEDDING_MODEL_ID: str = Field(default="amazon.titan-embed-image-v1")
+    BEDROCK_EMBEDDING_DIMENSION: int = Field(default=1024)
+    BEDROCK_MAX_RETRIES: int = Field(default=3)
+
+    # OpenSearch Serverless
+    OPENSEARCH_ENDPOINT: str = Field(default="")
+    OPENSEARCH_INDEX: str = Field(default="memories")
+    OPENSEARCH_MAX_RETRIES: int = Field(default=3)
+
     LOG_LEVEL: str = Field(default="INFO")
 
     @property
