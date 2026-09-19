@@ -1,37 +1,39 @@
 # REMORA
 
-**Your knowledge, actually retrievable.**
+**Your visual knowledge, always at hand.**
 
-Remora is a personal knowledge management system that ingests your documents, extracts their meaning, and lets you query them in natural language. Upload PDFs, markdown, and text files — then ask questions and get answers grounded in your own content, with citations back to the source.
+Remora is a personal visual knowledge engine that ingests your images and documents, extracts their meaning, and lets you query them in natural language. Upload images and documents — then ask questions and get answers grounded in your own content, with citations back to the source.
 
 ---
 
 ## The Problem
 
-Information accumulates faster than we can organize it. Research papers, meeting notes, technical docs, contracts, and articles pile up across folders, drives, and tools. When you need a specific detail later, you remember *that it exists* but not *where it is*. Traditional search finds filenames and keywords; it doesn't understand context or synthesize answers across documents.
+Information accumulates faster than we can organize it. Photos of receipts, screenshots, documents, and notes pile up across folders, drives, and tools. When you need a specific detail later, you remember *that it exists* but not *where it is*. Traditional search finds filenames and keywords; it doesn't understand context or synthesize answers across your visual memory.
 
 ## The Solution
 
-Remora builds a private, local-first knowledge base with semantic search and RAG (Retrieval-Augmented Generation):
+Remora builds a private, local-first visual knowledge base with semantic search and multimodal RAG (Retrieval-Augmented Generation):
 
-1. **Ingest** — Upload documents (PDF, Markdown, TXT) via the web UI or API
-2. **Process** — Extract text, chunk intelligently, generate embeddings
-3. **Store** — Persist vectors and metadata in a vector database
+1. **Ingest** — Upload images and documents via the web UI or API
+2. **Process** — OCR extraction (Textract), multimodal embeddings (Voyage)
+3. **Store** — Persist vectors in S3 Vectors, metadata in Neon PostgreSQL
 4. **Query** — Ask questions in natural language
-5. **Answer** — Retrieve relevant chunks, feed to an LLM, return a grounded response with source citations
+5. **Answer** — Multimodal reasoning (Nemotron) over retrieved images + OCR, grounded in your content with source citations
 
 ```mermaid
 flowchart LR
-    A[Upload Document] --> B[Text Extraction]
-    B --> C[Chunking]
-    C --> D[Embedding Generation]
-    D --> E[(Vector Store)]
-    F[User Query] --> G[Query Embedding]
-    G --> H[Semantic Search]
-    H --> E
-    E --> I[Retrieved Chunks]
-    I --> J[LLM + Context]
-    J --> K[Answer + Citations]
+    A[Upload Image] --> B[S3 Storage]
+    B --> C[Textract OCR]
+    C --> D[Neon: OCR + Metadata]
+    D --> E[Voyage Multimodal 3.5]
+    E --> F[(S3 Vectors)]
+    F[User Query] --> G[Voyage Text Embedding]
+    G --> H[S3 Vectors Search]
+    H --> I[Top-k Memory IDs]
+    I --> J[Neon: OCR + Metadata]
+    J --> K[S3: Image Bytes]
+    K --> L[Nemotron 3 Nano Omni]
+    L --> M[Final Answer + Citations]
 ```
 
 ---
@@ -40,15 +42,16 @@ flowchart LR
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| Document upload (PDF, MD, TXT) | 🟡 Planned | Drag-and-drop UI + REST API |
-| Text extraction & chunking | 🟡 Planned | PDF parsing, smart chunking with overlap |
-| Embedding generation | 🟡 Planned | Local or API-based embeddings |
-| Vector storage & semantic search | 🟡 Planned | pgvector / Qdrant / Pinecone |
-| RAG query pipeline | 🟡 Planned | Retrieval → rerank → LLM synthesis |
-| Source citations in answers | 🟡 Planned | Inline references to doc chunks |
-| User authentication | 🟡 Planned | JWT-based, local accounts |
-| Multi-collection organization | 🟡 Planned | Group docs by project/topic |
-| Chat-style query interface | 🟡 Planned | Conversational history per collection |
+| Image/document upload (PDF, JPG, PNG, WebP) | 🟢 Implemented | Drag-and-drop UI + REST API |
+| Textract OCR extraction | 🟢 Implemented | AWS Textract for text extraction |
+| Multimodal embedding (Voyage 3.5) | 🟢 Implemented | 1024-dim embeddings for images + OCR |
+| Vector storage (S3 Vectors) | 🟢 Implemented | Native S3 vector storage + cosine search |
+| Metadata + OCR storage (Neon PostgreSQL) | 🟢 Implemented | Persistent relational storage |
+| Multimodal reasoning (Nemotron 3 Nano Omni) | 🟢 Implemented | NVIDIA Nemotron 3 Nano Omni 30B A3B |
+| Visual query with image citations | 🟢 Implemented | Answers grounded in retrieved images |
+| Document upload (PDF) | 🟡 Planned | PDF support via Textract |
+| Multi-collection organization | 🟡 Planned | Group memories by project/topic |
+| Chat-style query interface | 🟢 Implemented | Conversational history per session |
 
 > **Status legend**: 🟢 Implemented · 🟡 Planned · 🔴 Not started
 
@@ -56,55 +59,56 @@ flowchart LR
 
 ## How It Works
 
-### Document Processing Pipeline
+### Ingestion Pipeline
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Upload    │────▶│  Extract    │────▶│   Chunk     │────▶│  Embed      │
-│  (API/UI)   │     │  (pdfplumber│     │ (recursive, │     │ (sentence-  │
-│             │     │  /markdown) │     │  overlap)   │     │  transformers│
+│   Upload    │────▶│  S3 Store   │────▶│  Textract   │────▶│   Neon      │
+│  (API/UI)   │     │  (Original) │     │  (OCR)      │     │  (OCR+Meta) │
 └─────────────┘     └─────────────┘     └─────────────┘     └──────┬──────┘
-                                                                    │
-                                                                    ▼
+                                                                     │
+                                                                     ▼
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  Metadata   │◀───│  Persist    │◀───│  Vector     │◀───│  Index      │
-│  (filename, │     │  to Vector  │     │  Store      │     │  (HNSW/IVF) │
-│   page,     │     │  DB         │     │             │     │             │
-│   section)  │     │             │     │             │     │             │
+│   Neon      │◀───│  Voyage     │◀───│  S3 Vectors │◀───│  Upsert     │
+│  (Metadata) │     │  Multimodal │     │  (1024-D)   │     │  Vector     │
 └─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
 ```
 
-### Query Pipeline (RAG)
+### Retrieval Pipeline
 
 ```
-User Query
+Text Query
     │
     ▼
 ┌─────────────────────┐
-│  Embed Query        │  (same model as ingestion)
+│  Voyage Text Embed  │  (Voyage Multimodal 3.5)
 └──────────┬──────────┘
            │
            ▼
 ┌─────────────────────┐
-│  Semantic Search    │  → Top-k chunks by cosine similarity
-│  (Vector DB)        │
+│  S3 Vectors Search  │  → Top-k by cosine similarity
 └──────────┬──────────┘
            │
            ▼
 ┌─────────────────────┐
-│  Rerank (optional)  │  → Cross-encoder for precision
+│  Neon Hydration     │  → OCR + Metadata + S3 Keys
+│  (Batch Lookup)     │
 └──────────┬──────────┘
            │
            ▼
 ┌─────────────────────┐
-│  Construct Prompt   │  → System prompt + chunks + query
+│  S3 Image Fetch     │  → Base64 Encode
+│  (Parallel)         │
 └──────────┬──────────┘
            │
            ▼
 ┌─────────────────────┐
-│  LLM Generation     │  → Streaming response with citations
-│  (local / API)      │
-└─────────────────────┘
+│  Nemotron 3 Nano    │  → Multimodal Reasoning
+│  Omni 30B A3B       │     (Images + OCR + Query)
+└──────────┬──────────┘
+           │
+           ▼
+      Final Answer
 ```
 
 ---
@@ -157,14 +161,17 @@ flowchart TB
 
 | Component | Technology | Status | Runs Locally | AWS Target |
 |-----------|------------|--------|--------------|------------|
-| Frontend | React 18, Vite, TypeScript, Tailwind | 🟡 Planned | ✅ | Amplify / S3 + CloudFront |
-| Backend API | FastAPI, Python 3.11+ | 🟡 Planned | ✅ | ECS Fargate / App Runner |
-| Vector DB | PostgreSQL + pgvector | 🟡 Planned | ✅ (Docker) | RDS for PostgreSQL + pgvector |
-| Object Storage | MinIO (local) / S3 | 🟡 Planned | ✅ (Docker) | S3 |
-| Job Queue | Redis + Celery | 🟡 Planned | ✅ (Docker) | ElastiCache + SQS |
-| Embeddings | sentence-transformers (local) / Bedrock Titan | 🟡 Planned | ✅ | Bedrock |
-| LLM | Ollama (local) / Bedrock Claude | 🟡 Planned | ✅ | Bedrock |
-| Auth | JWT, bcrypt | 🟡 Planned | ✅ | Cognito (future) |
+| Frontend | React 18, Vite, TypeScript, Tailwind | 🟢 Implemented | ✅ | Amplify / S3 + CloudFront |
+| Backend API | FastAPI, Python 3.11+ | 🟢 Implemented | ✅ | ECS Fargate / App Runner |
+| Metadata DB | Neon PostgreSQL | 🟢 Implemented | ✅ (Docker) | Neon / RDS for PostgreSQL |
+| Vector Store | S3 Vectors | 🟢 Implemented | ✅ (Docker) | S3 Vectors |
+| Object Storage | S3 | 🟢 Implemented | ✅ (Docker) | S3 |
+| Job Queue | SQS + Lambda / Celery | 🟢 Implemented | ✅ (Docker) | SQS + ElastiCache |
+| OCR | AWS Textract | 🟢 Implemented | ✅ | Textract |
+| Embeddings | Voyage Multimodal 3.5 | 🟢 Implemented | ✅ | Voyage API |
+| Vector Store | S3 Vectors | 🟢 Implemented | ✅ | S3 Vectors |
+| Multimodal Reasoning | Nemotron 3 Nano Omni | 🟢 Implemented | ✅ | NVIDIA NIM / API |
+| Auth | JWT, bcrypt | 🟢 Implemented | ✅ | Cognito (future) |
 
 ---
 
@@ -177,13 +184,14 @@ This project targets the **Ship It** track. The architecture is designed for AWS
 | Service | Purpose | Why |
 |---------|---------|-----|
 | **ECS Fargate** | Run backend API containers | Serverless compute, no EC2 management |
-| **RDS PostgreSQL + pgvector** | Primary + vector storage | Managed, ACID, pgvector extension native |
-| **S3** | Raw document storage | Durable, cheap, integrates with Lambda/ECS |
+| **Neon PostgreSQL** | Metadata + OCR storage | Managed, ACID, serverless, branchable |
+| **S3 Vectors** | Vector storage + similarity search | Native vector search, serverless, pay-per-use |
+| **S3** | Original image storage | Durable, cheap, integrates with Lambda/ECS |
 | **CloudFront + S3 (or Amplify)** | Frontend hosting | Global CDN, HTTPS, custom domain |
-| **Bedrock (Titan Embeddings, Claude 3)** | Embeddings + LLM | Fully managed, no GPU instances, data stays in AWS |
-| **ElastiCache Redis** | Job queue backend, caching | Managed Redis for Celery broker |
+| **Voyage API** | Multimodal embeddings | 1024-D, image+text, shared vector space |
+| **NVIDIA NIM / API** | Multimodal reasoning | Nemotron 3 Nano Omni 30B A3B |
+| **AWS Textract** | OCR extraction | Fully managed, high accuracy |
 | **SQS** | Async ingestion queue | Decouple upload from processing |
-| **Cognito** | User authentication (future) | Managed auth, MFA, social providers |
 | **Secrets Manager** | API keys, DB passwords | No secrets in code/env |
 | **CloudWatch / X-Ray** | Observability | Logs, metrics, distributed tracing |
 
@@ -201,14 +209,17 @@ This project targets the **Ship It** track. The architecture is designed for AWS
 |-------|--------------|
 | **Frontend** | React 18, TypeScript, Vite, Tailwind CSS, TanStack Query, Zustand |
 | **Backend** | FastAPI, Pydantic v2, Python 3.11+, Uvicorn |
-| **Vector Search** | pgvector (PostgreSQL extension), asyncpg / SQLAlchemy 2.0 |
-| **Document Processing** | pdfplumber, python-docx, markdown-it-py, tiktoken |
-| **Embeddings** | sentence-transformers (BAAI/bge-small-en-v1.5), optional: Bedrock Titan |
-| **LLM** | Ollama (local), AWS Bedrock (Claude 3 Haiku/Sonnet) |
-| **Reranking** | cross-encoder/ms-marco-MiniLM-L-6-v2 (optional) |
-| **Task Queue** | Celery, Redis |
+| **Vector Search** | S3 Vectors (cosine similarity) |
+| **Metadata DB** | Neon PostgreSQL (serverless, serverless, branchable) |
+| **Document Processing** | AWS Textract (OCR), pdfplumber, python-docx, markdown-it-py, tiktoken |
+| **Embeddings** | Voyage Multimodal 3.5 (1024-D, shared image/text space) |
+| **Multimodal Reasoning** | NVIDIA Nemotron 3 Nano Omni 30B A3B |
+| **OCR** | AWS Textract |
+| **Object Storage** | S3 (boto3) |
+| **Vector Search** | S3 Vectors (cosine similarity) |
+| **Task Queue** | SQS + Lambda / Celery, Redis |
 | **Auth** | python-jose (JWT), passlib (bcrypt) |
-| **Storage** | MinIO (S3-compatible) local, boto3 for S3 |
+| **Storage** | S3 (boto3) |
 | **Observability** | structlog, prometheus-client, OpenTelemetry (planned) |
 | **Infrastructure** | Docker, Docker Compose, Terraform (planned), GitHub Actions (planned) |
 | **Testing** | pytest, pytest-asyncio, httpx, pytest-mock |
@@ -277,27 +288,43 @@ pnpm dev  # http://localhost:5173
 
 | Variable | Description | Required | Default |
 |----------|-------------|----------|---------|
-| `DATABASE_URL` | PostgreSQL connection string | ✅ | `postgresql://postgres:postgres@localhost:5432/remora` |
-| `REDIS_URL` | Redis connection string | ✅ | `redis://localhost:6379/0` |
-| `MINIO_ENDPOINT` | MinIO/S3 endpoint | ✅ | `http://localhost:9000` |
-| `MINIO_ACCESS_KEY` | MinIO access key | ✅ | `minioadmin` |
-| `MINIO_SECRET_KEY` | MinIO secret key | ✅ | `minioadmin` |
-| `MINIO_BUCKET` | Bucket for raw documents | ✅ | `remora-documents` |
+| `AWS_REGION` | AWS region for all services | ✅ | `us-east-1` |
+| `AWS_ACCESS_KEY_ID` | AWS access key ID | ✅ | |
+| `AWS_SECRET_ACCESS_KEY` | AWS secret access key | ✅ | |
+| `AWS_ENDPOINT_URL` | Custom AWS endpoint (for LocalStack) | ❌ | |
+| `S3_BUCKET` | S3 bucket for original images | ✅ | `remora-memory` |
+| `MAX_FILE_SIZE_MB` | Max upload size | ❌ | `10` |
+| `MAX_FILES_PER_REQUEST` | Max files per upload | ❌ | `5` |
+| `RATE_LIMIT_UPLOADS` | Rate limit per minute | ❌ | `20` |
+| `MAX_TOTAL_STORAGE_GB` | Max total storage | ❌ | `10` |
+| `SQS_QUEUE_URL` | SQS queue for processing | ✅ | |
+| `SQS_MAX_MESSAGES` | Max messages per poll | ❌ | `1` |
+| `SQS_WAIT_TIME_SECONDS` | SQS long poll wait | ❌ | `20` |
+| `SQS_VISIBILITY_TIMEOUT_SECONDS` | Visibility timeout | ❌ | `300` |
+| `TEXTRACT_MAX_RETRIES` | Textract retry attempts | ❌ | `3` |
+| `VOYAGE_API_KEY` | Voyage AI API key | ✅ | |
+| `VOYAGE_MODEL` | Voyage model identifier | ❌ | `voyage-multimodal-3` |
+| `VOYAGE_EMBEDDING_DIMENSION` | Embedding dimension | ❌ | `1024` |
+| `VOYAGE_MAX_RETRIES` | Voyage API retries | ❌ | `3` |
+| `VOYAGE_TIMEOUT_SECONDS` | Voyage API timeout | ❌ | `30.0` |
+| `S3_VECTORS_BUCKET` | S3 Vectors bucket name | ✅ | |
+| `S3_VECTORS_INDEX` | S3 Vectors index name | ❌ | `memories` |
+| `S3_VECTORS_DIMENSION` | Vector dimension | ❌ | `1024` |
+| `S3_VECTORS_DISTANCE_METRIC` | Distance metric | ❌ | `cosine` |
+| `S3_VECTORS_MAX_RETRIES` | S3 Vectors retries | ❌ | `3` |
+| `NEON_DATABASE_URL` | Neon PostgreSQL connection string | ✅ | |
+| `NVIDIA_API_KEY` | NVIDIA API key | ✅ | |
+| `NVIDIA_API_BASE` | NVIDIA API base URL | ❌ | `https://integrate.api.nvidia.com/v1` |
+| `NEMOTRON_MODEL` | Nemotron model identifier | ❌ | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` |
+| `NEMOTRON_MAX_RETRIES` | Nemotron retries | ❌ | `3` |
+| `NEMOTRON_TIMEOUT_SECONDS` | Nemotron API timeout | ❌ | `60.0` |
+| `ADMIN_USERNAME` | Admin username | ❌ | `admin` |
+| `ADMIN_PASSWORD` | Admin password | ✅ | |
+| `ALLOWED_ORIGINS` | CORS allowed origins | ❌ | `*` |
+| `LOG_LEVEL` | Log level | ❌ | `INFO` |
 | `JWT_SECRET` | Secret for JWT signing | ✅ | **generate a strong random string** |
 | `JWT_ALGORITHM` | JWT algorithm | ❌ | `HS256` |
 | `JWT_EXPIRE_MINUTES` | Access token TTL | ❌ | `60` |
-| `EMBEDDING_MODEL` | sentence-transformers model name | ❌ | `BAAI/bge-small-en-v1.5` |
-| `EMBEDDING_DEVICE` | `cpu` or `cuda` | ❌ | `cpu` |
-| `LLM_PROVIDER` | `ollama` or `bedrock` | ❌ | `ollama` |
-| `OLLAMA_BASE_URL` | Ollama API base URL | If `ollama` | `http://localhost:11434` |
-| `OLLAMA_MODEL` | Ollama model tag | If `ollama` | `llama3.1:8b` |
-| `AWS_REGION` | AWS region for Bedrock/S3 | If `bedrock` | `us-east-1` |
-| `BEDROCK_EMBEDDING_MODEL` | Bedrock embedding model ID | If `bedrock` | `amazon.titan-embed-text-v2:0` |
-| `BEDROCK_LLM_MODEL` | Bedrock LLM model ID | If `bedrock` | `anthropic.claude-3-haiku-20240307-v1:0` |
-| `CHUNK_SIZE` | Token chunk size | ❌ | `512` |
-| `CHUNK_OVERLAP` | Token overlap between chunks | ❌ | `64` |
-| `TOP_K` | Retrieval count | ❌ | `8` |
-| `RERANK_TOP_K` | Rerank count (if enabled) | ❌ | `4` |
 
 ---
 
