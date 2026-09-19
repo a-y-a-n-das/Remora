@@ -3,7 +3,6 @@ from .aws_clients import (
     get_s3_client,
     get_async_s3_client,
     get_textract_client,
-    get_bedrock_runtime_client,
 )
 from .database import init_database, close_database, get_db_session, get_db
 from .logging import configure_logging, get_logger
@@ -25,7 +24,6 @@ __all__ = [
     "get_s3_client",
     "get_async_s3_client",
     "get_textract_client",
-    "get_bedrock_runtime_client",
     "init_database",
     "close_database",
     "get_db_session",

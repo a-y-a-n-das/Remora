@@ -39,10 +39,6 @@ def get_textract_client():
     return boto3.client("textract", config=get_boto3_config())
 
 
-def get_bedrock_runtime_client():
-    return boto3.client("bedrock-runtime", config=get_boto3_config())
-
-
 def get_s3_vectors_client():
     settings = get_settings()
     return boto3.client(

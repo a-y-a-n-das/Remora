@@ -48,11 +48,6 @@ class Settings(BaseSettings):
     # Textract
     TEXTRACT_MAX_RETRIES: int = Field(default=3)
 
-    # Bedrock
-    BEDROCK_EMBEDDING_MODEL_ID: str = Field(default="amazon.titan-embed-image-v1")
-    BEDROCK_EMBEDDING_DIMENSION: int = Field(default=1024)
-    BEDROCK_MAX_RETRIES: int = Field(default=3)
-
     # Neon PostgreSQL
     NEON_DATABASE_URL: str = Field(default="")
 

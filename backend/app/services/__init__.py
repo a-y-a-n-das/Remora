@@ -8,7 +8,6 @@ from .storage import (
     check_s3_object_exists,
 )
 from .textract import textract_service, TextractService
-from .bedrock import bedrock_embedding_service, BedrockEmbeddingService
 from .database import database_service, DatabaseService
 from .voyage import voyage_embedding_service, VoyageEmbeddingService
 from .s3_vectors import s3_vectors_service, S3VectorsService
@@ -24,8 +23,6 @@ __all__ = [
     "check_s3_object_exists",
     "textract_service",
     "TextractService",
-    "bedrock_embedding_service",
-    "BedrockEmbeddingService",
     "database_service",
     "DatabaseService",
     "voyage_embedding_service",
