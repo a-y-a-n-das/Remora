@@ -47,11 +47,6 @@ export const memoriesApi = {
     const response = await api.post('/query', { query, limit });
     return response.data;
   },
-
-  chat: async (conversationId: string | null, message: string) => {
-    const response = await api.post('/chat', { conversation_id: conversationId, message });
-    return response.data;
-  },
 };
 
 export const healthApi = {
