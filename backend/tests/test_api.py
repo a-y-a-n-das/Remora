@@ -7,7 +7,7 @@ from app.core.database import init_database, close_database, engine, async_sessi
 
 
 @pytest.fixture
-def client():
+def client(mock_settings):
     return TestClient(app)
 
 
@@ -280,3 +280,127 @@ def test_processing_status_updates_persist(client, mock_db_session):
     data = response.json()
     assert data["processing_status"] == "ready"
     assert data["moderation_status"] == "approved"
+
+
+def test_search_memories_success(client, mock_db_session):
+    """Test successful search with Voyage text embedding and S3 Vectors query."""
+    # Mock Voyage text embedding
+    with patch("app.api.memories.voyage_embedding_service.get_text_embedding", new_callable=AsyncMock) as mock_voyage:
+        mock_voyage.return_value = [0.1] * 1024
+
+        # Mock S3 Vectors query
+        with patch("app.api.memories.s3_vectors_service.query_vectors", new_callable=AsyncMock) as mock_s3v:
+            mock_s3v.return_value = [
+                {"memory_id": "mem_1", "distance": 0.1, "metadata": {"type": "image"}},
+                {"memory_id": "mem_2", "distance": 0.2, "metadata": {"type": "document"}},
+            ]
+
+            # Mock database lookup
+            mock_memory1 = MagicMock(spec=Memory)
+            mock_memory1.id = "mem_1"
+            mock_memory1.ocr_text = "AWS Invoice"
+            mock_memory1.s3_key = "memories/mem_1/original.jpg"
+            mock_memory1.original_filename = "invoice.jpg"
+            mock_memory1.created_at = "2024-01-15T10:30:00Z"
+
+            mock_memory2 = MagicMock(spec=Memory)
+            mock_memory2.id = "mem_2"
+            mock_memory2.ocr_text = "Project Plan"
+            mock_memory2.s3_key = "memories/mem_2/original.png"
+            mock_memory2.original_filename = "plan.png"
+            mock_memory2.created_at = "2024-01-14T10:30:00Z"
+
+            mock_result = MagicMock()
+            mock_result.scalars.return_value.all.return_value = [mock_memory1, mock_memory2]
+            mock_db_session.execute = AsyncMock(return_value=mock_result)
+
+            response = client.post("/memories/search", json={"query": "AWS invoice", "limit": 10})
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["query"] == "AWS invoice"
+            assert len(data["results"]) == 2
+            assert data["results"][0]["memory_id"] == "mem_1"
+            assert data["results"][0]["score"] == 0.1
+            assert data["results"][0]["ocr_text"] == "AWS Invoice"
+            assert data["results"][1]["memory_id"] == "mem_2"
+            assert data["results"][1]["score"] == 0.2
+            assert data["results"][1]["ocr_text"] == "Project Plan"
+
+
+def test_search_memories_empty_query(client, mock_db_session, mock_settings):
+    """Test search with empty query returns 422 (Pydantic validation)."""
+    response = client.post("/memories/search", json={"query": "", "limit": 10})
+    assert response.status_code == 422
+
+
+def test_search_memories_no_results(client, mock_db_session):
+    """Test search with no matching results."""
+    with patch("app.api.memories.voyage_embedding_service.get_text_embedding", new_callable=AsyncMock) as mock_voyage:
+        mock_voyage.return_value = [0.1] * 1024
+
+        with patch("app.api.memories.s3_vectors_service.query_vectors", new_callable=AsyncMock) as mock_s3v:
+            mock_s3v.return_value = []
+
+            response = client.post("/memories/search", json={"query": "nonexistent", "limit": 10})
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["query"] == "nonexistent"
+            assert data["results"] == []
+
+
+def test_search_memories_voyage_failure(client, mock_db_session, mock_settings):
+    """Test search when Voyage API fails."""
+    with patch("app.api.memories.voyage_embedding_service.get_text_embedding", new_callable=AsyncMock) as mock_voyage:
+        mock_voyage.return_value = None
+
+        response = client.post("/memories/search", json={"query": "test", "limit": 10})
+
+        assert response.status_code == 503
+        assert "Failed to generate query embedding" in response.json()["error"]
+
+
+def test_search_memories_s3_vectors_failure(client, mock_db_session, mock_settings):
+    """Test search when S3 Vectors query fails."""
+    with patch("app.api.memories.voyage_embedding_service.get_text_embedding", new_callable=AsyncMock) as mock_voyage:
+        mock_voyage.return_value = [0.1] * 1024
+
+        with patch("app.api.memories.s3_vectors_service.query_vectors", new_callable=AsyncMock) as mock_s3v:
+            mock_s3v.side_effect = Exception("S3 Vectors error")
+
+            response = client.post("/memories/search", json={"query": "test", "limit": 10})
+
+            # Should handle the error gracefully - currently returns 500
+            assert response.status_code in [500, 503]
+
+
+def test_search_memories_neon_missing_memory(client, mock_db_session, mock_settings):
+    """Test search when S3 Vectors returns memory IDs not in Neon."""
+    with patch("app.api.memories.voyage_embedding_service.get_text_embedding", new_callable=AsyncMock) as mock_voyage:
+        mock_voyage.return_value = [0.1] * 1024
+
+        with patch("app.api.memories.s3_vectors_service.query_vectors", new_callable=AsyncMock) as mock_s3v:
+            mock_s3v.return_value = [
+                {"memory_id": "mem_1", "distance": 0.1},
+                {"memory_id": "mem_2", "distance": 0.2},
+            ]
+
+            # Only mem_1 exists in Neon
+            mock_memory1 = MagicMock(spec=Memory)
+            mock_memory1.id = "mem_1"
+            mock_memory1.ocr_text = "AWS Invoice"
+            mock_memory1.s3_key = "memories/mem_1/original.jpg"
+            mock_memory1.original_filename = "invoice.jpg"
+            mock_memory1.created_at = "2024-01-15T10:30:00Z"
+
+            mock_result = MagicMock()
+            mock_result.scalars.return_value.all.return_value = [mock_memory1]
+            mock_db_session.execute = AsyncMock(return_value=mock_result)
+
+            response = client.post("/memories/search", json={"query": "test", "limit": 10})
+
+            assert response.status_code == 200
+            data = response.json()
+            assert len(data["results"]) == 1
+            assert data["results"][0]["memory_id"] == "mem_1"

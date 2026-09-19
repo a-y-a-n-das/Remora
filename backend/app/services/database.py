@@ -1,5 +1,5 @@
 import time
-from typing import Optional
+from typing import Optional, List
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
@@ -77,6 +77,16 @@ class DatabaseService:
         except Exception as e:
             logger.error("memory_get_failed", memory_id=memory_id, error=str(e))
             return None
+
+    async def get_memories_by_ids(self, db: AsyncSession, memory_ids: List[str]) -> List[Memory]:
+        if not memory_ids:
+            return []
+        try:
+            result = await db.execute(select(Memory).where(Memory.id.in_(memory_ids)))
+            return list(result.scalars().all())
+        except Exception as e:
+            logger.error("memories_get_by_ids_failed", memory_ids=memory_ids, error=str(e))
+            return []
 
 
 database_service = DatabaseService()

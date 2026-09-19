@@ -1,12 +1,22 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.schemas import UploadInitRequest, UploadInitResponse, MemoryStatus
+from app.schemas import (
+    UploadInitRequest,
+    UploadInitResponse,
+    MemoryStatus,
+    SearchRequest,
+    SearchResponse,
+    SearchResult,
+)
 from app.services import (
     generate_memory_id,
     validate_file,
     generate_presigned_upload_url,
     generate_presigned_download_url,
+    voyage_embedding_service,
+    s3_vectors_service,
+    database_service,
 )
 from app.core.logging import get_logger
 from app.core.exceptions import ValidationError
@@ -119,3 +129,61 @@ async def get_download_url(memory_id: str, db: AsyncSession = Depends(get_db)):
 
     download_url = await generate_presigned_download_url(memory.s3_key)
     return {"download_url": download_url}
+
+
+@router.post("/search", response_model=SearchResponse)
+async def search_memories(search_request: SearchRequest, db: AsyncSession = Depends(get_db)):
+    query = search_request.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+
+    limit = min(search_request.limit, 50)
+
+    # Generate query embedding using Voyage Multimodal 3.5
+    query_embedding = await voyage_embedding_service.get_text_embedding(query)
+    if query_embedding is None:
+        raise HTTPException(status_code=503, detail="Failed to generate query embedding")
+
+    # Search S3 Vectors for similar memory IDs
+    try:
+        vector_results = await s3_vectors_service.query_vectors(
+            query_vector=query_embedding,
+            top_k=limit,
+        )
+    except Exception as e:
+        logger.error("s3_vectors_query_failed", error=str(e))
+        raise HTTPException(status_code=503, detail="Vector search service unavailable")
+
+    if not vector_results:
+        return SearchResponse(results=[], query=query)
+
+    # Extract memory IDs from vector results
+    memory_ids = [result["memory_id"] for result in vector_results]
+
+    # Create a map of memory_id -> distance for relevance scoring
+    distance_map = {result["memory_id"]: result.get("distance", 0.0) for result in vector_results}
+
+    # Fetch memory records from Neon
+    result = await database_service.get_memories_by_ids(db, memory_ids)
+    memories = result if result else []
+
+    # Build search results preserving the order from vector search
+    search_results = []
+    for memory_id in memory_ids:
+        memory = next((m for m in memories if m.id == memory_id), None)
+        if not memory:
+            # Memory ID from S3 Vectors but missing from Neon - skip
+            continue
+
+        search_results.append(
+            SearchResult(
+                memory_id=memory.id,
+                score=distance_map.get(memory_id, 0.0),
+                ocr_text=memory.ocr_text,
+                s3_key=memory.s3_key,
+                original_filename=memory.original_filename,
+                uploaded_at=memory.created_at,
+            )
+        )
+
+    return SearchResponse(results=search_results, query=query)
