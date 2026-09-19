@@ -10,6 +10,7 @@ from .storage import (
 from .opensearch import opensearch_service, OpenSearchService
 from .textract import textract_service, TextractService
 from .bedrock import bedrock_embedding_service, BedrockEmbeddingService
+from .database import database_service, DatabaseService
 
 __all__ = [
     "generate_memory_id",
@@ -25,4 +26,6 @@ __all__ = [
     "TextractService",
     "bedrock_embedding_service",
     "BedrockEmbeddingService",
+    "database_service",
+    "DatabaseService",
 ]

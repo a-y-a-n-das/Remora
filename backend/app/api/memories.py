@@ -1,4 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas import UploadInitRequest, UploadInitResponse, MemoryStatus
 from app.services import (
     generate_memory_id,
@@ -8,13 +10,14 @@ from app.services import (
 )
 from app.core.logging import get_logger
 from app.core.exceptions import ValidationError
+from app.core.database import get_db
+from app.models import Memory
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/memories", tags=["memories"])
 
 _upload_rate_limit = {}
-_memory_status_store = {}
 
 
 def check_rate_limit(client_ip: str) -> None:
@@ -42,7 +45,7 @@ def check_rate_limit(client_ip: str) -> None:
 
 
 @router.post("/upload", response_model=UploadInitResponse)
-async def init_upload(request: Request, upload_request: UploadInitRequest):
+async def init_upload(request: Request, upload_request: UploadInitRequest, db: AsyncSession = Depends(get_db)):
     client_ip = request.client.host if request.client else "unknown"
     check_rate_limit(client_ip)
 
@@ -56,17 +59,17 @@ async def init_upload(request: Request, upload_request: UploadInitRequest):
         memory_id, upload_request.filename, upload_request.mime_type
     )
 
-    _memory_status_store[memory_id] = {
-        "memory_id": memory_id,
-        "processing_status": "uploaded",
-        "moderation_status": "pending",
-        "original_filename": upload_request.filename,
-        "mime_type": upload_request.mime_type,
-        "size_bytes": upload_request.size_bytes,
-        "s3_key": s3_key,
-        "uploaded_at": "now",
-        "error_message": None,
-    }
+    memory = Memory(
+        id=memory_id,
+        s3_key=s3_key,
+        original_filename=upload_request.filename,
+        mime_type=upload_request.mime_type,
+        size_bytes=upload_request.size_bytes,
+        processing_status="uploaded",
+        moderation_status="pending",
+    )
+    db.add(memory)
+    await db.flush()
 
     logger.info(
         "upload_initialized",
@@ -86,32 +89,33 @@ async def init_upload(request: Request, upload_request: UploadInitRequest):
 
 
 @router.get("/{memory_id}/status", response_model=MemoryStatus)
-async def get_memory_status(memory_id: str):
-    mem = _memory_status_store.get(memory_id)
-    if not mem:
+async def get_memory_status(memory_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Memory).where(Memory.id == memory_id))
+    memory = result.scalar_one_or_none()
+    if not memory:
         raise HTTPException(status_code=404, detail="Memory not found")
 
     return MemoryStatus(
-        memory_id=mem["memory_id"],
-        processing_status=mem["processing_status"],
-        moderation_status=mem["moderation_status"],
-        original_filename=mem.get("original_filename"),
-        mime_type=mem.get("mime_type"),
-        size_bytes=mem.get("size_bytes"),
-        uploaded_at=mem.get("uploaded_at"),
-        error_message=mem.get("error_message"),
+        memory_id=memory.id,
+        processing_status=memory.processing_status,
+        moderation_status=memory.moderation_status,
+        original_filename=memory.original_filename,
+        mime_type=memory.mime_type,
+        size_bytes=memory.size_bytes,
+        uploaded_at=memory.created_at,
+        error_message=None,
     )
 
 
 @router.get("/{memory_id}/download-url")
-async def get_download_url(memory_id: str):
-    mem = _memory_status_store.get(memory_id)
-    if not mem:
+async def get_download_url(memory_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Memory).where(Memory.id == memory_id))
+    memory = result.scalar_one_or_none()
+    if not memory:
         raise HTTPException(status_code=404, detail="Memory not found")
 
-    s3_key = mem.get("s3_key")
-    if not s3_key:
+    if not memory.s3_key:
         raise HTTPException(status_code=404, detail="Memory has no associated file")
 
-    download_url = await generate_presigned_download_url(s3_key)
+    download_url = await generate_presigned_download_url(memory.s3_key)
     return {"download_url": download_url}
