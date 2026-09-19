@@ -15,6 +15,7 @@ from app.services import (
     textract_service,
     voyage_embedding_service,
     opensearch_service,
+    s3_vectors_service,
     database_service,
 )
 
@@ -72,6 +73,16 @@ async def process_memory_event(event: S3EventRecord) -> bool:
                 image_bytes, ocr_text
             )
 
+            # Upsert vector to S3 Vectors
+            s3_vectors_success = await s3_vectors_service.upsert_vector(
+                memory_id,
+                embedding,
+                metadata={"content_type": "image"},
+            )
+            if not s3_vectors_success:
+                raise ProcessingError("Failed to upsert vector to S3 Vectors", retryable=True)
+
+            # Index to OpenSearch (keep for search endpoint compatibility)
             document = {
                 "memory_id": memory_id,
                 "s3_key": s3_key,

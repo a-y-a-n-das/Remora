@@ -5,6 +5,7 @@ from botocore.exceptions import ClientError
 from app.services.textract import TextractService, textract_service
 from app.services.voyage import VoyageEmbeddingService, voyage_embedding_service
 from app.services.opensearch import OpenSearchService, opensearch_service
+from app.services.s3_vectors import S3VectorsService, s3_vectors_service
 from app.services.database import database_service
 from app.workers.processor import ProcessingError, process_memory_event
 from app.workers.s3_events import S3EventRecord
@@ -315,12 +316,14 @@ class TestProcessMemoryEvent:
 
             with patch.object(textract_service, "extract_text", return_value="AWS Invoice"):
                 with patch.object(voyage_embedding_service, "get_image_embedding", return_value=[0.1] * 1024):
-                    with patch.object(opensearch_service, "update_memory_status", return_value=True):
-                        with patch.object(opensearch_service, "index_memory", return_value=True):
-                            with patch.object(database_service, "update_ocr_text", return_value=True) as mock_ocr:
-                                result = await process_memory_event(event)
-                                assert result is True
-                                mock_ocr.assert_awaited_once()
+                    with patch.object(s3_vectors_service, "upsert_vector", new_callable=AsyncMock, return_value=True) as mock_s3v:
+                        with patch.object(opensearch_service, "update_memory_status", return_value=True):
+                            with patch.object(opensearch_service, "index_memory", return_value=True):
+                                with patch.object(database_service, "update_ocr_text", return_value=True) as mock_ocr:
+                                    result = await process_memory_event(event)
+                                    assert result is True
+                                    mock_ocr.assert_awaited_once()
+                                    mock_s3v.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_process_memory_event_download_failure(self, event):
@@ -334,18 +337,32 @@ class TestProcessMemoryEvent:
                             await process_memory_event(event)
 
     @pytest.mark.asyncio
+    async def test_process_memory_event_s3_vectors_failure(self, event):
+        with patch("app.workers.processor.download_image_from_s3", new_callable=AsyncMock) as mock_download:
+            mock_download.return_value = b"fake_image_bytes"
+
+            with patch.object(textract_service, "extract_text", return_value="AWS Invoice"):
+                with patch.object(voyage_embedding_service, "get_image_embedding", return_value=[0.1] * 1024):
+                    with patch.object(s3_vectors_service, "upsert_vector", new_callable=AsyncMock, return_value=False):
+                        with patch.object(database_service, "update_ocr_text", new_callable=AsyncMock, return_value=True):
+                            with patch.object(database_service, "update_memory_status", new_callable=AsyncMock, return_value=True):
+                                with pytest.raises(ProcessingError):
+                                    await process_memory_event(event)
+
+    @pytest.mark.asyncio
     async def test_process_memory_event_opensearch_failure(self, event):
         with patch("app.workers.processor.download_image_from_s3", new_callable=AsyncMock) as mock_download:
             mock_download.return_value = b"fake_image_bytes"
 
             with patch.object(textract_service, "extract_text", return_value="AWS Invoice"):
                 with patch.object(voyage_embedding_service, "get_image_embedding", return_value=[0.1] * 1024):
-                    with patch.object(opensearch_service, "update_memory_status", return_value=True):
-                        with patch.object(database_service, "update_ocr_text", new_callable=AsyncMock, return_value=True):
-                            with patch.object(database_service, "update_memory_status", new_callable=AsyncMock, return_value=True):
-                                with patch.object(opensearch_service, "index_memory", return_value=False):
-                                    with pytest.raises(ProcessingError):
-                                        await process_memory_event(event)
+                    with patch.object(s3_vectors_service, "upsert_vector", new_callable=AsyncMock, return_value=True):
+                        with patch.object(opensearch_service, "update_memory_status", return_value=True):
+                            with patch.object(database_service, "update_ocr_text", new_callable=AsyncMock, return_value=True):
+                                with patch.object(database_service, "update_memory_status", new_callable=AsyncMock, return_value=True):
+                                    with patch.object(opensearch_service, "index_memory", return_value=False):
+                                        with pytest.raises(ProcessingError):
+                                            await process_memory_event(event)
 
 
 class TestDuplicateMemoryIdProcessing:
@@ -365,10 +382,11 @@ class TestDuplicateMemoryIdProcessing:
 
             with patch.object(textract_service, "extract_text", return_value="AWS Invoice"):
                 with patch.object(voyage_embedding_service, "get_image_embedding", return_value=[0.1] * 1024):
-                    with patch.object(opensearch_service, "update_memory_status", return_value=True):
-                        with patch.object(database_service, "update_ocr_text", return_value=True):
-                            with patch.object(opensearch_service, "index_memory", return_value=True):
-                                result1 = await process_memory_event(event)
-                                result2 = await process_memory_event(event)
-                                assert result1 is True
-                                assert result2 is True
+                    with patch.object(s3_vectors_service, "upsert_vector", return_value=True):
+                        with patch.object(opensearch_service, "update_memory_status", return_value=True):
+                            with patch.object(database_service, "update_ocr_text", return_value=True):
+                                with patch.object(opensearch_service, "index_memory", return_value=True):
+                                    result1 = await process_memory_event(event)
+                                    result2 = await process_memory_event(event)
+                                    assert result1 is True
+                                    assert result2 is True
