@@ -3,7 +3,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 from botocore.exceptions import ClientError
 from app.services.textract import TextractService, textract_service
-from app.services.bedrock import BedrockEmbeddingService, bedrock_embedding_service
+from app.services.voyage import VoyageEmbeddingService, voyage_embedding_service
 from app.services.opensearch import OpenSearchService, opensearch_service
 from app.services.database import database_service
 from app.workers.processor import ProcessingError, process_memory_event
@@ -100,16 +100,6 @@ class TestTextractService:
 
     
 
-
-class TestBedrockEmbeddingService:
-    @pytest.fixture
-    def bedrock_service(self):
-        return BedrockEmbeddingService()
-
-    def test_unsupported_model(self, bedrock_service):
-        with patch.object(bedrock_service, "settings", MagicMock(BEDROCK_EMBEDDING_MODEL_ID="unsupported-model")):
-            result = bedrock_service.get_multimodal_embedding("test-bucket", "memories/mem_abc123/original.jpg")
-            assert result is None
 
 class TestOpenSearchService:
     @pytest.fixture
@@ -324,7 +314,7 @@ class TestProcessMemoryEvent:
             mock_download.return_value = b"fake_image_bytes"
 
             with patch.object(textract_service, "extract_text", return_value="AWS Invoice"):
-                with patch.object(bedrock_embedding_service, "get_multimodal_embedding", return_value=[0.1] * 1024):
+                with patch.object(voyage_embedding_service, "get_image_embedding", return_value=[0.1] * 1024):
                     with patch.object(opensearch_service, "update_memory_status", return_value=True):
                         with patch.object(opensearch_service, "index_memory", return_value=True):
                             with patch.object(database_service, "update_ocr_text", return_value=True) as mock_ocr:
@@ -349,7 +339,7 @@ class TestProcessMemoryEvent:
             mock_download.return_value = b"fake_image_bytes"
 
             with patch.object(textract_service, "extract_text", return_value="AWS Invoice"):
-                with patch.object(bedrock_embedding_service, "get_multimodal_embedding", return_value=[0.1] * 1024):
+                with patch.object(voyage_embedding_service, "get_image_embedding", return_value=[0.1] * 1024):
                     with patch.object(opensearch_service, "update_memory_status", return_value=True):
                         with patch.object(database_service, "update_ocr_text", new_callable=AsyncMock, return_value=True):
                             with patch.object(database_service, "update_memory_status", new_callable=AsyncMock, return_value=True):
@@ -374,7 +364,7 @@ class TestDuplicateMemoryIdProcessing:
             mock_download.return_value = b"fake_image_bytes"
 
             with patch.object(textract_service, "extract_text", return_value="AWS Invoice"):
-                with patch.object(bedrock_embedding_service, "get_multimodal_embedding", return_value=[0.1] * 1024):
+                with patch.object(voyage_embedding_service, "get_image_embedding", return_value=[0.1] * 1024):
                     with patch.object(opensearch_service, "update_memory_status", return_value=True):
                         with patch.object(database_service, "update_ocr_text", return_value=True):
                             with patch.object(opensearch_service, "index_memory", return_value=True):

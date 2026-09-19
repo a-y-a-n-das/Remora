@@ -13,7 +13,7 @@ from app.workers.s3_events import (
 )
 from app.services import (
     textract_service,
-    bedrock_embedding_service,
+    voyage_embedding_service,
     opensearch_service,
     database_service,
 )
@@ -68,8 +68,8 @@ async def process_memory_event(event: S3EventRecord) -> bool:
             # Persist OCR text to Neon
             await database_service.update_ocr_text(db, memory_id, ocr_text)
 
-            embedding = bedrock_embedding_service.get_multimodal_embedding(
-                s3_bucket, s3_key, ocr_text
+            embedding = await voyage_embedding_service.get_image_embedding(
+                image_bytes, ocr_text
             )
 
             document = {
