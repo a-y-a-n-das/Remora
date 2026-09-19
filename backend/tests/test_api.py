@@ -174,6 +174,65 @@ def test_get_memory_status_not_found(client, mock_db_session):
     assert response.status_code == 404
 
 
+def test_list_memories(client, mock_db_session):
+    first_memory = MagicMock(spec=Memory)
+    first_memory.id = "mem_test123"
+    first_memory.original_filename = "test.jpg"
+    first_memory.mime_type = "image/jpeg"
+    first_memory.size_bytes = 1024
+    first_memory.processing_status = "ready"
+    first_memory.moderation_status = "approved"
+    first_memory.s3_key = "memories/mem_test123/original.jpg"
+    first_memory.created_at = "2024-01-15T10:30:00Z"
+
+    second_memory = MagicMock(spec=Memory)
+    second_memory.id = "mem_test456"
+    second_memory.original_filename = "notes.pdf"
+    second_memory.mime_type = "application/pdf"
+    second_memory.size_bytes = 2048
+    second_memory.processing_status = "processing"
+    second_memory.moderation_status = "pending"
+    second_memory.s3_key = "memories/mem_test456/original.bin"
+    second_memory.created_at = "2024-01-14T10:30:00Z"
+
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = [first_memory, second_memory]
+    mock_db_session.execute = AsyncMock(return_value=mock_result)
+
+    with patch("app.api.memories.database_service.get_memories", new_callable=AsyncMock) as get_memories:
+        get_memories.return_value = [first_memory, second_memory]
+        response = client.get("/memories")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "id": "mem_test123",
+            "filename": "test.jpg",
+            "original_filename": "test.jpg",
+            "mime_type": "image/jpeg",
+            "size": 1024,
+            "size_bytes": 1024,
+            "processing_status": "ready",
+            "moderation_status": "approved",
+            "s3_key": "memories/mem_test123/original.jpg",
+            "uploaded_at": "2024-01-15T10:30:00Z",
+        },
+        {
+            "id": "mem_test456",
+            "filename": "notes.pdf",
+            "original_filename": "notes.pdf",
+            "mime_type": "application/pdf",
+            "size": 2048,
+            "size_bytes": 2048,
+            "processing_status": "processing",
+            "moderation_status": "pending",
+            "s3_key": "memories/mem_test456/original.bin",
+            "uploaded_at": "2024-01-14T10:30:00Z",
+        },
+    ]
+    get_memories.assert_awaited_once_with(mock_db_session)
+
+
 def test_get_download_url_success(client, mock_db_session):
     mock_memory = MagicMock(spec=Memory)
     mock_memory.id = "mem_test123"

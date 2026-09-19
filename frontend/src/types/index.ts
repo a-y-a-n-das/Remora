@@ -5,6 +5,7 @@ export interface Item {
   date: string;
   imageUrl?: string;
   size?: number;
+  status?: 'uploaded' | 'processing' | 'ready' | 'failed';
 }
 
 export interface ChatMessage {

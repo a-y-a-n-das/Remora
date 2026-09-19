@@ -78,6 +78,14 @@ class DatabaseService:
             logger.error("memory_get_failed", memory_id=memory_id, error=str(e))
             return None
 
+    async def get_memories(self, db: AsyncSession) -> List[Memory]:
+        try:
+            result = await db.execute(select(Memory).order_by(Memory.created_at.desc()))
+            return list(result.scalars().all())
+        except Exception as e:
+            logger.error("memories_get_failed", error=str(e))
+            return []
+
     async def get_memories_by_ids(self, db: AsyncSession, memory_ids: List[str]) -> List[Memory]:
         if not memory_ids:
             return []

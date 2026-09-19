@@ -11,6 +11,7 @@ from app.schemas import (
     QueryRequest,
     QueryResponse,
     QueryResult,
+    MemoryListItem,
 )
 from app.services import (
     generate_memory_id,
@@ -56,6 +57,26 @@ def check_rate_limit(client_ip: str) -> None:
         )
 
     _upload_rate_limit[client_ip].append(now)
+
+
+@router.get("", response_model=list[MemoryListItem])
+async def list_memories(db: AsyncSession = Depends(get_db)):
+    memories = await database_service.get_memories(db)
+    return [
+        MemoryListItem(
+            id=memory.id,
+            filename=memory.original_filename,
+            original_filename=memory.original_filename,
+            mime_type=memory.mime_type,
+            size=memory.size_bytes,
+            size_bytes=memory.size_bytes,
+            processing_status=memory.processing_status,
+            moderation_status=memory.moderation_status,
+            s3_key=memory.s3_key,
+            uploaded_at=memory.created_at,
+        )
+        for memory in memories
+    ]
 
 
 @router.post("/upload", response_model=UploadInitResponse)

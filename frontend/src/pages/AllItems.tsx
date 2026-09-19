@@ -1,8 +1,7 @@
-import { useState, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Upload,
-  X,
   Image as ImageIcon,
   FileText,
   MoreHorizontal,
@@ -11,7 +10,9 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { Button } from '../components/Button';
-import { mockItems } from '../data/mockData';
+import { UploadModal } from '../components/UploadModal';
+import { memoriesApi } from '../lib/api';
+import { useAppStore } from '../store';
 import type { Item } from '../types';
 
 function DocThumb() {
@@ -77,6 +78,17 @@ function ItemCard({ item, onClick }: ItemCardProps) {
             {item.name}
           </p>
           <p className="text-xs text-gray-500 mt-1">{item.date}</p>
+          {item.status && (
+            <p className={`mt-1 text-xs ${
+              item.status === 'failed'
+                ? 'text-red-400'
+                : item.status === 'ready'
+                  ? 'text-green-400'
+                  : 'text-blue-300'
+            }`}>
+              {item.status === 'failed' ? 'Failed' : item.status === 'ready' ? 'Ready' : 'Processing'}
+            </p>
+          )}
         </div>
 
         <div className="relative">
@@ -190,259 +202,135 @@ function ItemPreview({ item, onClose }: ItemPreviewProps) {
   );
 }
 
-interface UploadModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onUpload: (files: File[]) => void;
-}
-
-function UploadModal({
-  isOpen,
-  onClose,
-  onUpload,
-}: UploadModalProps) {
-  const [files, setFiles] = useState<File[]>([]);
-  const [progress, setProgress] = useState(0);
-  const [state, setState] = useState<'idle' | 'uploading' | 'success'>('idle');
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const handleFiles = (fileList: FileList | null) => {
-    if (!fileList || fileList.length === 0) return;
-
-    const remainingSlots = 10 - files.length;
-    const newFiles = Array.from(fileList).slice(0, remainingSlots);
-
-    setFiles((prev) => [...prev, ...newFiles]);
-  };
-
-  const removeFile = (index: number) => {
-    setFiles((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const handleUpload = () => {
-    if (files.length === 0) return;
-
-    setState('uploading');
-    setProgress(0);
-
-    const interval = setInterval(() => {
-      setProgress((currentProgress) => {
-        const nextProgress = Math.min(
-          currentProgress + Math.random() * 20,
-          100
-        );
-
-        if (nextProgress >= 100) {
-          clearInterval(interval);
-
-          setTimeout(() => {
-            onUpload(files);
-            setState('success');
-
-            setTimeout(() => {
-              setState('idle');
-              setFiles([]);
-              setProgress(0);
-              onClose();
-            }, 1000);
-          }, 200);
-
-          return 100;
-        }
-
-        return nextProgress;
-      });
-    }, 100);
-  };
-
-  if (!isOpen) return null;
-
-  return (
-    <AnimatePresence>
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
-        onClick={onClose}
-      >
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95, y: 20 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.95, y: -20 }}
-          className="relative w-full max-w-2xl bg-gray-900 rounded-2xl border border-white/10 shadow-2xl overflow-hidden"
-          onClick={(event) => event.stopPropagation()}
-        >
-          {/* Header */}
-          <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
-            <h2 className="text-lg font-semibold text-white">
-              Upload files
-            </h2>
-
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-2 text-gray-400 hover:text-white rounded-lg transition-colors"
-              aria-label="Close upload modal"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-
-          {/* Content */}
-          <div className="p-6">
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept="image/*,.pdf"
-              className="hidden"
-              onChange={(event) => {
-                handleFiles(event.target.files);
-                event.target.value = '';
-              }}
-            />
-
-            {state === 'uploading' ? (
-              <div className="py-12 text-center">
-                <div className="mx-auto mb-6 w-16 h-16 rounded-full bg-white/5 flex items-center justify-center">
-                  <Upload className="w-8 h-8 text-blue-400 animate-pulse" />
-                </div>
-
-                <p className="text-white font-medium mb-2">
-                  Uploading...
-                </p>
-
-                <div className="w-full max-w-md mx-auto h-2 bg-white/10 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-blue-500 transition-all duration-200"
-                    style={{ width: `${progress}%` }}
-                  />
-                </div>
-
-                <p className="text-sm text-gray-500 mt-2">
-                  {Math.round(progress)}%
-                </p>
-              </div>
-            ) : state === 'success' ? (
-              <div className="py-12 text-center">
-                <div className="mx-auto mb-6 w-16 h-16 rounded-full bg-green-500/10 flex items-center justify-center">
-                  <Upload className="w-8 h-8 text-green-400" />
-                </div>
-
-                <p className="text-white font-medium">
-                  Upload complete
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {/* Empty state */}
-                {files.length === 0 && (
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="w-full border-2 border-dashed border-white/20 rounded-2xl p-12 text-center hover:border-blue-500/50 transition-colors cursor-pointer"
-                  >
-                    <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-white/5 flex items-center justify-center">
-                      <Upload className="w-8 h-8 text-gray-500" />
-                    </div>
-
-                    <p className="text-white font-medium mb-2">
-                      Drop files here, or{' '}
-                      <span className="text-blue-400 underline">
-                        browse
-                      </span>
-                    </p>
-
-                    <p className="text-gray-500 text-sm">
-                      Images and PDFs supported · Max 10MB each
-                    </p>
-                  </button>
-                )}
-
-                {/* Selected files */}
-                {files.length > 0 && (
-                  <>
-                    <div className="space-y-3">
-                      {files.map((file, index) => (
-                        <div
-                          key={`${file.name}-${file.lastModified}-${index}`}
-                          className="flex items-center gap-3 p-3 bg-gray-800/50 rounded-lg border border-white/10"
-                        >
-                          <div className="w-12 h-12 flex-shrink-0 rounded-lg overflow-hidden bg-gray-800 border border-white/10 flex items-center justify-center">
-                            {file.type.startsWith('image/') ? (
-                              <img
-                                src={URL.createObjectURL(file)}
-                                alt=""
-                                className="w-full h-full object-cover"
-                              />
-                            ) : (
-                              <FileText className="w-6 h-6 text-gray-500" />
-                            )}
-                          </div>
-
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium text-white truncate">
-                              {file.name}
-                            </p>
-
-                            <p className="text-xs text-gray-500">
-                              {(file.size / 1024 / 1024).toFixed(2)} MB
-                            </p>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() => removeFile(index)}
-                            className="p-2 text-gray-500 hover:text-red-400 transition-colors"
-                            aria-label={`Remove ${file.name}`}
-                          >
-                            <X className="w-5 h-5" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* File actions */}
-                    <div className="mt-4 flex justify-end gap-3">
-                      <Button
-                        variant="ghost"
-                        onClick={() => setFiles([])}
-                      >
-                        Clear all
-                      </Button>
-
-                      {files.length < 10 && (
-                        <Button
-                          variant="ghost"
-                          onClick={() => fileInputRef.current?.click()}
-                        >
-                          Add more
-                        </Button>
-                      )}
-
-                      <Button onClick={handleUpload}>
-                        Upload {files.length > 1 ? `(${files.length})` : ''}
-                      </Button>
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-        </motion.div>
-      </motion.div>
-    </AnimatePresence>
-  );
-}
-
 export function AllItems() {
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const { items, setItems, addItem } = useAppStore();
+  const pollingIds = useRef(new Set<string>());
 
-  const handleUpload = (files: File[]) => {
-    console.log('Files uploaded:', files);
-  };
+  const updateItem = useCallback((id: string, update: Partial<Item>) => {
+    setItems(useAppStore.getState().items.map((item) =>
+      item.id === id ? { ...item, ...update } : item
+    ));
+  }, [setItems]);
+
+  const toItem = useCallback((memory: Record<string, unknown>, imageUrl?: string): Item => {
+    const name = String(memory.original_filename ?? memory.name ?? 'Untitled memory');
+    const uploadedAt = memory.uploaded_at ? new Date(String(memory.uploaded_at)) : new Date();
+    const status = String(memory.processing_status ?? memory.status ?? 'uploaded');
+    return {
+      id: String(memory.memory_id ?? memory.id),
+      name,
+      type: String(memory.mime_type ?? '').startsWith('image/') ? 'image' : 'document',
+      date: Number.isNaN(uploadedAt.getTime()) ? 'Just now' : uploadedAt.toLocaleDateString(),
+      imageUrl,
+      size: typeof memory.size_bytes === 'number' ? memory.size_bytes : undefined,
+      status: ['uploaded', 'processing', 'ready', 'failed'].includes(status)
+        ? status as Item['status']
+        : 'uploaded',
+    };
+  }, []);
+
+  const pollStatus = useCallback(async (memoryId: string) => {
+    if (pollingIds.current.has(memoryId)) return;
+    pollingIds.current.add(memoryId);
+    try {
+      while (true) {
+        const status = await memoriesApi.getStatus(memoryId);
+        const processingStatus = String(status.processing_status);
+        updateItem(memoryId, {
+          status: ['uploaded', 'processing', 'ready', 'failed'].includes(processingStatus)
+            ? processingStatus as Item['status']
+            : 'processing',
+        });
+
+        if (processingStatus === 'ready' || processingStatus === 'failed') {
+          if (processingStatus === 'ready') {
+            const { download_url: imageUrl } = await memoriesApi.getDownloadUrl(memoryId);
+            updateItem(memoryId, { imageUrl });
+          }
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+    } catch (error) {
+      console.error(`Failed to poll memory ${memoryId}`, error);
+      updateItem(memoryId, { status: 'failed' });
+    } finally {
+      pollingIds.current.delete(memoryId);
+    }
+  }, [updateItem]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadItems = async () => {
+      try {
+        const response = await memoriesApi.list();
+        const memories = Array.isArray(response) ? response : response.memories ?? response.items ?? [];
+        const loadedItems = await Promise.all((memories as Record<string, unknown>[]).map(async (memory) => {
+          const item = toItem(memory);
+          if (item.status === 'ready' && item.type === 'image') {
+            try {
+              const { download_url: imageUrl } = await memoriesApi.getDownloadUrl(item.id);
+              return { ...item, imageUrl };
+            } catch (error) {
+              console.error(`Failed to load image URL for memory ${item.id}`, error);
+            }
+          }
+          return item;
+        }));
+        if (!cancelled) {
+          setItems(loadedItems);
+          loadedItems
+            .filter((item) => item.status !== 'ready' && item.status !== 'failed')
+            .forEach((item) => void pollStatus(item.id));
+        }
+      } catch (error) {
+        console.error('Failed to load memories', error);
+      }
+    };
+    void loadItems();
+    return () => {
+      cancelled = true;
+    };
+  }, [pollStatus, setItems, toItem]);
+
+  const handleUpload = useCallback(async (files: File[]) => {
+    for (const file of files) {
+      const localId = `upload-${file.name}-${file.lastModified}`;
+      let memoryId = localId;
+      addItem({
+        id: localId,
+        name: file.name,
+        type: file.type.startsWith('image/') ? 'image' : 'document',
+        date: 'Just now',
+        imageUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
+        size: file.size,
+        status: 'processing',
+      });
+
+      try {
+        const initialized = await memoriesApi.upload(file);
+        const item: Item = {
+          ...toItem(initialized, file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined),
+          name: file.name,
+          type: file.type.startsWith('image/') ? 'image' : 'document',
+          date: 'Just now',
+          size: file.size,
+          status: 'processing',
+        };
+        memoryId = item.id;
+        setItems(useAppStore.getState().items.map((existing) =>
+          existing.id === localId ? item : existing
+        ));
+        await memoriesApi.uploadToS3(initialized.upload_url, file);
+        void pollStatus(item.id);
+      } catch (error) {
+        console.error(`Failed to upload ${file.name}`, error);
+        updateItem(memoryId, { status: 'failed' });
+      }
+    }
+  }, [addItem, pollStatus, setItems, toItem, updateItem]);
 
   return (
     <div className="flex-1 h-full flex flex-col bg-bg overflow-hidden">
@@ -467,7 +355,7 @@ export function AllItems() {
       {/* Grid */}
       <div className="flex-1 overflow-y-auto px-6 pb-8 pt-7 lg:px-7">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 xl:gap-4">
-          {mockItems.map((item) => (
+          {items.map((item) => (
             <ItemCard
               key={item.id}
               item={item}
@@ -490,7 +378,10 @@ export function AllItems() {
         <UploadModal
           isOpen={uploadOpen}
           onClose={() => setUploadOpen(false)}
-          onUpload={handleUpload}
+          onFilesSelected={(files) => {
+            void handleUpload(files);
+            setUploadOpen(false);
+          }}
         />
       )}
     </div>

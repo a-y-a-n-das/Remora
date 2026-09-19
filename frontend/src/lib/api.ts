@@ -18,6 +18,11 @@ api.interceptors.request.use((config) => {
 });
 
 export const memoriesApi = {
+  list: async () => {
+    const response = await api.get('/memories');
+    return response.data;
+  },
+
   upload: async (file: File) => {
     const response = await api.post('/memories/upload', {
       filename: file.name,
@@ -44,7 +49,7 @@ export const memoriesApi = {
   },
 
   search: async (query: string, limit = 10) => {
-    const response = await api.post('/query', { query, limit });
+    const response = await api.post('/memories/query', { query, limit });
     return response.data;
   },
 };

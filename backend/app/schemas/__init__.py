@@ -27,6 +27,19 @@ class MemoryStatus(BaseModel):
     error_message: Optional[str] = None
 
 
+class MemoryListItem(BaseModel):
+    id: str
+    filename: str
+    original_filename: str
+    mime_type: str
+    size: int
+    size_bytes: int
+    processing_status: str
+    moderation_status: str
+    s3_key: str
+    uploaded_at: Optional[datetime] = None
+
+
 class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=1000)
     limit: int = Field(default=10, ge=1, le=50)
