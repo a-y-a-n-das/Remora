@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     OPENSEARCH_INDEX: str = Field(default="memories")
     OPENSEARCH_MAX_RETRIES: int = Field(default=3)
 
+    # Neon PostgreSQL
+    NEON_DATABASE_URL: str = Field(default="")
+
     LOG_LEVEL: str = Field(default="INFO")
 
     @property

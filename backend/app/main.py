@@ -9,6 +9,7 @@ from app.core.exceptions import (
     http_exception_handler,
     generic_exception_handler,
 )
+from app.core.database import init_database, close_database
 from app.api import health, memories
 
 logger = get_logger(__name__)
@@ -17,10 +18,12 @@ logger = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_logging()
+    init_database()
     logger.info("application_starting")
 
     yield
 
+    await close_database()
     logger.info("application_shutting_down")
 
 
