@@ -68,6 +68,13 @@ class Settings(BaseSettings):
     VOYAGE_MAX_RETRIES: int = Field(default=3)
     VOYAGE_TIMEOUT_SECONDS: float = Field(default=30.0)
 
+    # S3 Vectors
+    S3_VECTORS_BUCKET: str = Field(default="")
+    S3_VECTORS_INDEX: str = Field(default="memories")
+    S3_VECTORS_DIMENSION: int = Field(default=1024)
+    S3_VECTORS_DISTANCE_METRIC: str = Field(default="cosine")
+    S3_VECTORS_MAX_RETRIES: int = Field(default=3)
+
     LOG_LEVEL: str = Field(default="INFO")
 
     @property

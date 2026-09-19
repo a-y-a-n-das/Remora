@@ -43,6 +43,19 @@ def get_bedrock_runtime_client():
     return boto3.client("bedrock-runtime", config=get_boto3_config())
 
 
+def get_s3_vectors_client():
+    settings = get_settings()
+    return boto3.client(
+        "s3vectors",
+        config=Config(
+            region_name=settings.AWS_REGION,
+            retries={"max_attempts": settings.S3_VECTORS_MAX_RETRIES, "mode": "standard"},
+            connect_timeout=30,
+            read_timeout=60,
+        ),
+    )
+
+
 def get_opensearch_client():
     from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
 

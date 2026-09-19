@@ -12,6 +12,7 @@ from .textract import textract_service, TextractService
 from .bedrock import bedrock_embedding_service, BedrockEmbeddingService
 from .database import database_service, DatabaseService
 from .voyage import voyage_embedding_service, VoyageEmbeddingService
+from .s3_vectors import s3_vectors_service, S3VectorsService
 
 __all__ = [
     "generate_memory_id",
@@ -31,4 +32,6 @@ __all__ = [
     "DatabaseService",
     "voyage_embedding_service",
     "VoyageEmbeddingService",
+    "s3_vectors_service",
+    "S3VectorsService",
 ]
