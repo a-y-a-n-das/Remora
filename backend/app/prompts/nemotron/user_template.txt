@@ -1,0 +1,4 @@
+User Query: {query}
+
+Retrieved Memories:
+{memories}

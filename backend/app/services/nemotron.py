@@ -1,5 +1,6 @@
 import base64
 import time
+from pathlib import Path
 from typing import Optional, List, Dict, Any
 import httpx
 from app.core.config import get_settings
@@ -16,6 +17,11 @@ class NemotronService:
     def __init__(self, client: Optional[httpx.AsyncClient] = None):
         self.settings = get_settings()
         self._client = client
+        # Load prompt templates at initialization
+        prompts_dir = Path(__file__).parent.parent / "prompts" / "nemotron"
+        self._system_prompt = (Path(__file__).parent.parent / "prompts" / "nemotron" / "system.txt").read_text(encoding="utf-8")
+        self._user_template = (Path(__file__).parent.parent / "prompts" / "nemotron" / "user_template.txt").read_text(encoding="utf-8")
+        self._memory_item_template = (Path(__file__).parent.parent / "prompts" / "nemotron" / "memory_item.txt").read_text(encoding="utf-8")
 
     @property
     def client(self) -> httpx.AsyncClient:
@@ -67,15 +73,7 @@ class NemotronService:
         """Build the message content for Nemotron with images and OCR context."""
 
         # System prompt
-        system_prompt = (
-            "You are an AI assistant helping a user find information from their personal visual memory collection. "
-            "You will be given a user query and a set of retrieved memories, each containing an image and associated OCR text. "
-            "Your task is to analyze the images and OCR text to answer the user's query as accurately as possible. "
-            "IMPORTANT: You must inspect the actual images provided. The OCR text is supporting context and may be incomplete or contain errors. "
-            "Rely on the actual visual content of the images as your primary source of truth. "
-            "If the images do not contain relevant information for the query, state that clearly. "
-            "Cite the specific memories (by their IDs or descriptions) that support your answer."
-        )
+        system_prompt = self._system_prompt
 
         # Build user message with query and context
         user_content = [
@@ -120,7 +118,7 @@ class NemotronService:
                 })
 
         messages = [
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": self._system_prompt},
             {"role": "user", "content": user_content}
         ]
 
