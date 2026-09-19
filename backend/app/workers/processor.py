@@ -65,6 +65,9 @@ async def process_memory_event(event: S3EventRecord) -> bool:
 
             ocr_text = textract_service.extract_text(s3_bucket, s3_key)
 
+            # Persist OCR text to Neon
+            await database_service.update_ocr_text(db, memory_id, ocr_text)
+
             embedding = bedrock_embedding_service.get_multimodal_embedding(
                 s3_bucket, s3_key, ocr_text
             )

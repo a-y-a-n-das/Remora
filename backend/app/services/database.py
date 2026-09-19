@@ -44,6 +44,32 @@ class DatabaseService:
             logger.error("memory_status_update_failed", memory_id=memory_id, error=str(e))
             return False
 
+    async def update_ocr_text(
+        self,
+        db: AsyncSession,
+        memory_id: str,
+        ocr_text: Optional[str],
+    ) -> bool:
+        try:
+            result = await db.execute(select(Memory).where(Memory.id == memory_id))
+            memory = result.scalar_one_or_none()
+            if not memory:
+                logger.warning("memory_not_found_for_ocr_update", memory_id=memory_id)
+                return False
+
+            memory.ocr_text = ocr_text
+            await db.flush()
+
+            logger.info(
+                "ocr_text_updated",
+                memory_id=memory_id,
+                text_length=len(ocr_text) if ocr_text else 0,
+            )
+            return True
+        except Exception as e:
+            logger.error("ocr_text_update_failed", memory_id=memory_id, error=str(e))
+            return False
+
     async def get_memory(self, db: AsyncSession, memory_id: str) -> Optional[Memory]:
         try:
             result = await db.execute(select(Memory).where(Memory.id == memory_id))
