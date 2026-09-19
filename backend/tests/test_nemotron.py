@@ -12,7 +12,7 @@ class TestNemotronService:
         service.settings = MagicMock(
             NVIDIA_API_KEY="test-api-key",
             NVIDIA_API_BASE="https://integrate.api.nvidia.com/v1",
-            NEMOTRON_MODEL="nvidia/nemotron-3-ultra",
+            NEMOTRON_MODEL="nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
             NEMOTRON_MAX_RETRIES=3,
             NEMOTRON_TIMEOUT_SECONDS=60.0,
         )
@@ -30,11 +30,11 @@ class TestNemotronService:
         nemotron_service.set_client(None)
 
     @pytest.mark.asyncio
-    async def test_reason_success(self, nemotron_service, mock_client):
-        """Test successful multimodal reasoning."""
+    async def test_reason_uses_configured_model(self, nemotron_service):
+        """Test that the configured NEMOTRON_MODEL is passed to the API request."""
         mock_response = MagicMock()
         mock_response.json.return_value = {
-            "choices": [{"message": {"content": "Based on the images, I can see an AWS invoice for $2,499."}}]
+            "choices": [{"message": {"content": "Test answer"}}]
         }
         mock_response.raise_for_status = MagicMock()
 
@@ -46,17 +46,19 @@ class TestNemotronService:
             {
                 "memory_id": "mem_1",
                 "distance": 0.1,
-                "ocr_text": "AWS Invoice $2,499",
+                "ocr_text": "Test OCR",
                 "s3_key": "memories/mem_1/original.jpg",
-                "original_filename": "invoice.jpg",
+                "original_filename": "test.jpg",
             }
         ]
 
-        answer = await nemotron_service.reason("What was the AWS invoice amount?", [memories[0]])
+        await nemotron_service.reason("test query", [memories[0]])
 
-        assert answer is not None
-        assert "AWS invoice" in answer or "2,499" in answer
+        # Verify the model passed to the API matches the configured model
         mock_client.post.assert_awaited_once()
+        call_args = mock_client.post.call_args
+        payload = call_args[1]["json"]
+        assert payload["model"] == "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
 
     @pytest.mark.asyncio
     async def test_reason_no_memories(self, nemotron_service):

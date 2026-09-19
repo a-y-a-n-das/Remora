@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     # NVIDIA Nemotron
     NVIDIA_API_KEY: str = Field(default="")
     NVIDIA_API_BASE: str = Field(default="https://integrate.api.nvidia.com/v1")
-    NEMOTRON_MODEL: str = Field(default="nvidia/nemotron-3-ultra")
+    NEMOTRON_MODEL: str = Field(default="nvidia/nemotron-3-nano-omni-30b-a3b-reasoning")
     NEMOTRON_MAX_RETRIES: int = Field(default=3)
     NEMOTRON_TIMEOUT_SECONDS: float = Field(default=60.0)
 
