@@ -8,6 +8,9 @@ from app.schemas import (
     SearchRequest,
     SearchResponse,
     SearchResult,
+    QueryRequest,
+    QueryResponse,
+    QueryResult,
 )
 from app.services import (
     generate_memory_id,
@@ -17,6 +20,7 @@ from app.services import (
     voyage_embedding_service,
     s3_vectors_service,
     database_service,
+    nemotron_service,
 )
 from app.core.logging import get_logger
 from app.core.exceptions import ValidationError
@@ -187,3 +191,89 @@ async def search_memories(search_request: SearchRequest, db: AsyncSession = Depe
         )
 
     return SearchResponse(results=search_results, query=query)
+
+
+@router.post("/query", response_model=QueryResponse)
+async def query_memories(query_request: QueryRequest, db: AsyncSession = Depends(get_db)):
+    query = query_request.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+
+    limit = min(query_request.limit, 10)
+
+    # Generate query embedding using Voyage Multimodal 3.5
+    query_embedding = await voyage_embedding_service.get_text_embedding(query)
+    if query_embedding is None:
+        raise HTTPException(status_code=503, detail="Failed to generate query embedding")
+
+    # Search S3 Vectors for similar memory IDs
+    try:
+        vector_results = await s3_vectors_service.query_vectors(
+            query_vector=query_embedding,
+            top_k=limit,
+        )
+    except Exception as e:
+        logger.error("s3_vectors_query_failed", error=str(e))
+        raise HTTPException(status_code=503, detail="Vector search service unavailable")
+
+    if not vector_results:
+        return QueryResponse(query=query, answer="I couldn't find any relevant memories for your query.", sources=[])
+
+    # Extract memory IDs from vector results
+    memory_ids = [result["memory_id"] for result in vector_results]
+
+    # Create a map of memory_id -> distance for relevance scoring
+    distance_map = {result["memory_id"]: result.get("distance", 0.0) for result in vector_results}
+
+    # Fetch memory records from Neon
+    result = await database_service.get_memories_by_ids(db, memory_ids)
+    memories = result if result else []
+
+    if not memories:
+        return QueryResponse(
+            query=query,
+            answer="I found some relevant memories but couldn't retrieve their details from the database.",
+            sources=[],
+        )
+
+    # Prepare memories with S3 image data for Nemotron
+    enriched_memories = []
+    for memory_id in memory_ids:
+        memory = next((m for m in memories if m.id == memory_id), None)
+        if not memory:
+            continue
+
+        distance = distance_map.get(memory_id, 0.0)
+        enriched_memories.append({
+            "memory_id": memory.id,
+            "distance": distance,
+            "ocr_text": memory.ocr_text or "",
+            "s3_key": memory.s3_key,
+            "original_filename": memory.original_filename or "unknown",
+        })
+
+    # Perform multimodal reasoning with Nemotron
+    answer = await nemotron_service.reason(query, enriched_memories)
+
+    if answer is None:
+        raise HTTPException(status_code=503, detail="Reasoning service unavailable")
+
+    # Build source results
+    sources = []
+    for memory_id in memory_ids:
+        memory = next((m for m in memories if m.id == memory_id), None)
+        if not memory:
+            continue
+
+        sources.append(
+            QueryResult(
+                memory_id=memory.id,
+                score=distance_map.get(memory.id, 0.0),
+                ocr_text=memory.ocr_text,
+                s3_key=memory.s3_key,
+                original_filename=memory.original_filename,
+                uploaded_at=memory.created_at,
+            )
+        )
+
+    return QueryResponse(query=query, answer=answer, sources=sources)

@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     S3_VECTORS_DISTANCE_METRIC: str = Field(default="cosine")
     S3_VECTORS_MAX_RETRIES: int = Field(default=3)
 
+    # NVIDIA Nemotron
+    NVIDIA_API_KEY: str = Field(default="")
+    NVIDIA_API_BASE: str = Field(default="https://integrate.api.nvidia.com/v1")
+    NEMOTRON_MODEL: str = Field(default="nvidia/nemotron-3-ultra")
+    NEMOTRON_MAX_RETRIES: int = Field(default=3)
+    NEMOTRON_TIMEOUT_SECONDS: float = Field(default=60.0)
+
     LOG_LEVEL: str = Field(default="INFO")
 
     @property
