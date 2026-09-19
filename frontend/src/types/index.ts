@@ -27,10 +27,3 @@ export interface SearchResult {
   items: Item[];
   query: string;
 }
-
-export interface UploadState {
-  status: 'idle' | 'dragging' | 'uploading' | 'success' | 'error';
-  progress: number;
-  files: File[];
-  error?: string;
-}

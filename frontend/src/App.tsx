@@ -5,40 +5,14 @@ import { Sidebar } from './components/Sidebar';
 import { Home } from './pages/Home';
 import { SearchSession } from './pages/SearchSession';
 import { AllItems } from './pages/AllItems';
-import { UploadModal } from './components/UploadModal';
 import { useAppStore } from './store';
-import { memoriesApi } from './lib/api';
 
 function AppLayout() {
   const {
     activeView,
-    uploadOpen,
-    setUploadOpen,
     currentSession,
     sidebarCollapsed,
-    addItem,
   } = useAppStore();
-
-  const handleFilesSelected = async (files: File[]) => {
-    for (const file of files) {
-      const localId = `upload-${file.name}-${file.lastModified}`;
-      addItem({
-        id: localId,
-        name: file.name,
-        type: file.type.startsWith('image/') ? 'image' : 'document',
-        date: 'Just now',
-        imageUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
-        size: file.size,
-        status: 'processing',
-      });
-      try {
-        const initialized = await memoriesApi.upload(file);
-        await memoriesApi.uploadToS3(initialized.upload_url, file);
-      } catch (error) {
-        console.error(`Failed to upload ${file.name}`, error);
-      }
-    }
-  };
 
   return (
     <div className="min-h-screen bg-bg flex">
@@ -87,15 +61,6 @@ function AppLayout() {
           )}
         </AnimatePresence>
       </div>
-
-      <UploadModal
-        isOpen={uploadOpen}
-        onClose={() => setUploadOpen(false)}
-        onFilesSelected={(files) => {
-          void handleFilesSelected(files);
-          setUploadOpen(false);
-        }}
-      />
     </div>
   );
 }

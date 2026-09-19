@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Item, ChatMessage, SearchSession, UploadState } from '../types';
+import type { Item, ChatMessage, SearchSession } from '../types';
 import { buildAssistantReply } from '../data/mockData';
 
 interface AppState {
@@ -24,15 +24,6 @@ interface AppState {
   setCurrentSession: (session: SearchSession | null) => void;
   addMessage: (message: ChatMessage) => void;
   addUserQuery: (query: string) => void;
-
-  // Upload
-  uploadState: UploadState;
-  setUploadState: (state: Partial<UploadState>) => void;
-  resetUploadState: () => void;
-
-  // Upload Modal
-  uploadOpen: boolean;
-  setUploadOpen: (open: boolean) => void;
 
   // UI
   sidebarCollapsed: boolean;
@@ -142,16 +133,6 @@ export const useAppStore = create<AppState>()(
             recentSearches: [newQuery, ...get().recentSearches.filter((s) => s !== newQuery)].slice(0, 8),
           };
         }),
-
-      // Upload
-      uploadState: { status: 'idle', progress: 0, files: [] },
-      setUploadState: (state) =>
-        set((prev) => ({ uploadState: { ...prev.uploadState, ...state } })),
-      resetUploadState: () => set({ uploadState: { status: 'idle', progress: 0, files: [] } }),
-
-      // Upload Modal
-      uploadOpen: false,
-      setUploadOpen: (open) => set({ uploadOpen: open }),
 
       // UI
       sidebarCollapsed: false,
