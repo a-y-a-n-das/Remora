@@ -61,6 +61,13 @@ class Settings(BaseSettings):
     # Neon PostgreSQL
     NEON_DATABASE_URL: str = Field(default="")
 
+    # Voyage AI
+    VOYAGE_API_KEY: str = Field(default="")
+    VOYAGE_MODEL: str = Field(default="voyage-multimodal-3")
+    VOYAGE_EMBEDDING_DIMENSION: int = Field(default=1024)
+    VOYAGE_MAX_RETRIES: int = Field(default=3)
+    VOYAGE_TIMEOUT_SECONDS: float = Field(default=30.0)
+
     LOG_LEVEL: str = Field(default="INFO")
 
     @property
