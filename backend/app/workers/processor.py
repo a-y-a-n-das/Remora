@@ -14,7 +14,6 @@ from app.workers.s3_events import (
 from app.services import (
     textract_service,
     voyage_embedding_service,
-    opensearch_service,
     s3_vectors_service,
     database_service,
 )
@@ -56,8 +55,7 @@ async def process_memory_event(event: S3EventRecord) -> bool:
 
     async with get_db_session() as db:
         try:
-            # Update status in both OpenSearch and Neon
-            opensearch_service.update_memory_status(memory_id, "processing")
+            # Update status in Neon
             await database_service.update_memory_status(db, memory_id, "processing")
 
             image_bytes = await download_image_from_s3(s3_bucket, s3_key)
@@ -82,30 +80,7 @@ async def process_memory_event(event: S3EventRecord) -> bool:
             if not s3_vectors_success:
                 raise ProcessingError("Failed to upsert vector to S3 Vectors", retryable=True)
 
-            # Index to OpenSearch (keep for search endpoint compatibility)
-            document = {
-                "memory_id": memory_id,
-                "s3_key": s3_key,
-                "file": {
-                    "original_filename": s3_key.split("/")[-1],
-                    "mime_type": "image/unknown",
-                    "size_bytes": len(image_bytes),
-                },
-                "time": {
-                    "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "captured_at": None,
-                },
-                "text": {"ocr": ocr_text or ""},
-                "embedding": embedding or [],
-                "processing": {"status": "ready", "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
-                "moderation": {"status": "approved", "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
-            }
-
-            success = opensearch_service.index_memory(document)
-            if not success:
-                raise ProcessingError("Failed to index memory in OpenSearch", retryable=True)
-
-            # Update status to ready in both stores
+            # Update status to ready in Neon
             await database_service.update_memory_status(
                 db, memory_id, "ready", moderation_status="approved"
             )
@@ -121,13 +96,11 @@ async def process_memory_event(event: S3EventRecord) -> bool:
             return True
 
         except ProcessingError:
-            opensearch_service.update_memory_status(memory_id, "failed", error_message=str(sys.exc_info()[1]))
             await database_service.update_memory_status(db, memory_id, "failed", error_message=str(sys.exc_info()[1]))
             raise
         except Exception as e:
             duration_ms = int((time.time() - start_time) * 1000)
             logger.error("processing_failed", memory_id=memory_id, error=str(e), duration_ms=duration_ms)
-            opensearch_service.update_memory_status(memory_id, "failed", error_message=str(e))
             await database_service.update_memory_status(db, memory_id, "failed", error_message=str(e))
             return False
 
@@ -138,9 +111,6 @@ async def run_worker():
     if not settings.SQS_QUEUE_URL:
         logger.error("SQS_QUEUE_URL not configured, worker cannot start")
         return
-
-    if not opensearch_service.is_available():
-        logger.warning("OpenSearch not configured, worker will fail on indexing")
 
     logger.info(
         "worker_starting",

@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from botocore.exceptions import ClientError
 from app.services.textract import TextractService, textract_service
 from app.services.voyage import VoyageEmbeddingService, voyage_embedding_service
-from app.services.opensearch import OpenSearchService, opensearch_service
 from app.services.s3_vectors import S3VectorsService, s3_vectors_service
 from app.services.database import database_service
 from app.workers.processor import ProcessingError, process_memory_event
@@ -98,119 +97,6 @@ class TestTextractService:
         result = textract_service.extract_text("test-bucket", "memories/mem_abc123/original.jpg")
 
         assert result is None
-
-    
-
-
-class TestOpenSearchService:
-    @pytest.fixture
-    def opensearch_service(self):
-        return OpenSearchService()
-
-    def test_ensure_index_creates_mapping(self, opensearch_service):
-        mock_client = MagicMock()
-        mock_client.indices.exists.return_value = False
-        opensearch_service.client = mock_client
-
-        result = opensearch_service.ensure_index()
-
-        assert result is True
-        mock_client.indices.create.assert_called_once()
-        call_args = mock_client.indices.create.call_args
-        assert call_args[1]["index"] == "memories"
-        assert "mappings" in call_args[1]["body"]
-        assert "embedding" in call_args[1]["body"]["mappings"]["properties"]
-        assert call_args[1]["body"]["mappings"]["properties"]["embedding"]["type"] == "knn_vector"
-        assert call_args[1]["body"]["mappings"]["properties"]["embedding"]["dimension"] == 1024
-
-    def test_ensure_index_skips_if_exists(self, opensearch_service):
-        mock_client = MagicMock()
-        mock_client.indices.exists.return_value = True
-        opensearch_service.client = mock_client
-
-        result = opensearch_service.ensure_index()
-
-        assert result is True
-        mock_client.indices.create.assert_not_called()
-
-    def test_index_memory_success(self, opensearch_service):
-        mock_client = MagicMock()
-        opensearch_service.client = mock_client
-
-        document = {
-            "memory_id": "mem_abc123",
-            "s3_key": "memories/mem_abc123/original.jpg",
-            "file": {"original_filename": "test.jpg", "mime_type": "image/jpeg", "size_bytes": 1024},
-            "time": {"uploaded_at": "2024-01-15T10:30:00Z"},
-            "text": {"ocr": "AWS Invoice"},
-            "embedding": [0.1] * 1024,
-            "processing": {"status": "ready"},
-            "moderation": {"status": "approved"},
-        }
-
-        result = opensearch_service.index_memory(document)
-
-        assert result is True
-        mock_client.index.assert_called_once_with(
-            index="memories",
-            id="mem_abc123",
-            body=document,
-            refresh=True,
-        )
-
-    def test_index_memory_unavailable(self, opensearch_service):
-        opensearch_service.client = None
-        result = opensearch_service.index_memory({"memory_id": "mem_abc123"})
-        assert result is False
-
-    def test_update_memory_status(self, opensearch_service):
-        mock_client = MagicMock()
-        opensearch_service.client = mock_client
-
-        result = opensearch_service.update_memory_status("mem_abc123", "ready", error_message=None, moderation_status="approved")
-
-        assert result is True
-        mock_client.update.assert_called_once()
-        call_args = mock_client.update.call_args
-        assert call_args[1]["index"] == "memories"
-        assert call_args[1]["id"] == "mem_abc123"
-        assert "doc" in call_args[1]["body"]
-        assert call_args[1]["body"]["doc"]["processing"]["status"] == "ready"
-
-    def test_get_memory(self, opensearch_service):
-        mock_client = MagicMock()
-        mock_client.get.return_value = {"_source": {"memory_id": "mem_abc123", "status": "ready"}}
-        opensearch_service.client = mock_client
-
-        result = opensearch_service.get_memory("mem_abc123")
-
-        assert result is not None
-        assert result["memory_id"] == "mem_abc123"
-
-    def test_delete_memory(self, opensearch_service):
-        mock_client = MagicMock()
-        opensearch_service.client = mock_client
-
-        result = opensearch_service.delete_memory("mem_abc123")
-
-        assert result is True
-        mock_client.delete.assert_called_once_with(index="memories", id="mem_abc123", refresh=True)
-
-    def test_hybrid_search_filters_ready_approved(self, opensearch_service):
-        mock_client = MagicMock()
-        mock_client.search.return_value = {
-            "hits": {"hits": [{"_source": {"memory_id": "mem_abc123"}, "_score": 0.9}]}
-        }
-        opensearch_service.client = mock_client
-
-        results = opensearch_service.hybrid_search("AWS", query_embedding=[0.1] * 1024, limit=10)
-
-        assert len(results) == 1
-        assert results[0]["memory_id"] == "mem_abc123"
-        call_args = mock_client.search.call_args
-        query = call_args[1]["body"]["query"]["bool"]
-        assert {"term": {"processing.status": "ready"}} in query["must"]
-        assert {"term": {"moderation.status": "approved"}} in query["must"]
 
 
 class TestDatabaseService:
@@ -317,13 +203,11 @@ class TestProcessMemoryEvent:
             with patch.object(textract_service, "extract_text", return_value="AWS Invoice"):
                 with patch.object(voyage_embedding_service, "get_image_embedding", return_value=[0.1] * 1024):
                     with patch.object(s3_vectors_service, "upsert_vector", new_callable=AsyncMock, return_value=True) as mock_s3v:
-                        with patch.object(opensearch_service, "update_memory_status", return_value=True):
-                            with patch.object(opensearch_service, "index_memory", return_value=True):
-                                with patch.object(database_service, "update_ocr_text", return_value=True) as mock_ocr:
-                                    result = await process_memory_event(event)
-                                    assert result is True
-                                    mock_ocr.assert_awaited_once()
-                                    mock_s3v.assert_awaited_once()
+                        with patch.object(database_service, "update_ocr_text", return_value=True) as mock_ocr:
+                            result = await process_memory_event(event)
+                            assert result is True
+                            mock_ocr.assert_awaited_once()
+                            mock_s3v.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_process_memory_event_download_failure(self, event):
@@ -350,19 +234,17 @@ class TestProcessMemoryEvent:
                                     await process_memory_event(event)
 
     @pytest.mark.asyncio
-    async def test_process_memory_event_opensearch_failure(self, event):
+    async def test_process_memory_event_s3_vectors_failure_with_status(self, event):
         with patch("app.workers.processor.download_image_from_s3", new_callable=AsyncMock) as mock_download:
             mock_download.return_value = b"fake_image_bytes"
 
             with patch.object(textract_service, "extract_text", return_value="AWS Invoice"):
                 with patch.object(voyage_embedding_service, "get_image_embedding", return_value=[0.1] * 1024):
-                    with patch.object(s3_vectors_service, "upsert_vector", new_callable=AsyncMock, return_value=True):
-                        with patch.object(opensearch_service, "update_memory_status", return_value=True):
-                            with patch.object(database_service, "update_ocr_text", new_callable=AsyncMock, return_value=True):
-                                with patch.object(database_service, "update_memory_status", new_callable=AsyncMock, return_value=True):
-                                    with patch.object(opensearch_service, "index_memory", return_value=False):
-                                        with pytest.raises(ProcessingError):
-                                            await process_memory_event(event)
+                    with patch.object(s3_vectors_service, "upsert_vector", new_callable=AsyncMock, return_value=False):
+                        with patch.object(database_service, "update_ocr_text", new_callable=AsyncMock, return_value=True):
+                            with patch.object(database_service, "update_memory_status", new_callable=AsyncMock, return_value=True):
+                                with pytest.raises(ProcessingError):
+                                    await process_memory_event(event)
 
 
 class TestDuplicateMemoryIdProcessing:
@@ -383,10 +265,9 @@ class TestDuplicateMemoryIdProcessing:
             with patch.object(textract_service, "extract_text", return_value="AWS Invoice"):
                 with patch.object(voyage_embedding_service, "get_image_embedding", return_value=[0.1] * 1024):
                     with patch.object(s3_vectors_service, "upsert_vector", return_value=True):
-                        with patch.object(opensearch_service, "update_memory_status", return_value=True):
-                            with patch.object(database_service, "update_ocr_text", return_value=True):
-                                with patch.object(opensearch_service, "index_memory", return_value=True):
-                                    result1 = await process_memory_event(event)
-                                    result2 = await process_memory_event(event)
-                                    assert result1 is True
-                                    assert result2 is True
+                        with patch.object(database_service, "update_ocr_text", return_value=True):
+                            with patch.object(database_service, "update_memory_status", return_value=True):
+                                result1 = await process_memory_event(event)
+                                result2 = await process_memory_event(event)
+                                assert result1 is True
+                                assert result2 is True

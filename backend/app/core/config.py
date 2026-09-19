@@ -53,11 +53,6 @@ class Settings(BaseSettings):
     BEDROCK_EMBEDDING_DIMENSION: int = Field(default=1024)
     BEDROCK_MAX_RETRIES: int = Field(default=3)
 
-    # OpenSearch Serverless
-    OPENSEARCH_ENDPOINT: str = Field(default="")
-    OPENSEARCH_INDEX: str = Field(default="memories")
-    OPENSEARCH_MAX_RETRIES: int = Field(default=3)
-
     # Neon PostgreSQL
     NEON_DATABASE_URL: str = Field(default="")
 
