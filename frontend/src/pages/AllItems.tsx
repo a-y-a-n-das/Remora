@@ -393,7 +393,12 @@ export function AllItems() {
         addInFlightMemory(serverMemoryId);
 
         // Step 3: Upload to S3 via presigned URL
-        await memoriesApi.uploadToS3(initialized.upload_url, file);
+        try {
+          await memoriesApi.uploadToS3(initialized.upload_url, file);
+        } catch (uploadError) {
+          console.error(`Failed to upload ${file.name} to S3`, uploadError);
+          continue;
+        }
 
         // Step 4: Trigger processing pipeline
         try {
