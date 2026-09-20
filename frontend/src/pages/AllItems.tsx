@@ -4,10 +4,6 @@ import {
   Upload,
   Image as ImageIcon,
   FileText,
-  MoreHorizontal,
-  Download,
-  Trash2,
-  ExternalLink,
   CheckCircle,
   XCircle,
   Loader2,
@@ -72,7 +68,6 @@ interface ItemCardProps {
 }
 
 function ItemCard({ item, onClick }: ItemCardProps) {
-  const [menuOpen, setMenuOpen] = useState(false);
 
   return (
     <motion.div
@@ -138,53 +133,6 @@ function ItemCard({ item, onClick }: ItemCardProps) {
               </>
             )}
           </p>
-        </div>
-
-        <div className="relative">
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              setMenuOpen((open) => !open);
-            }}
-            className="p-1.5 text-gray-500 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
-            aria-label="More options"
-          >
-            <MoreHorizontal className="w-5 w-5" />
-          </button>
-
-          {menuOpen && (
-            <motion.div
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="absolute right-0 bottom-full mb-2 w-40 bg-gray-900 border border-white/10 rounded-lg overflow-hidden shadow-xl z-20"
-              onClick={(event) => event.stopPropagation()}
-            >
-              <button
-                type="button"
-                className="w-full px-4 py-2 text-left text-white hover:bg-white/10 flex items-center gap-2"
-              >
-                <Download className="w-4 h-4" />
-                Download
-              </button>
-
-              <button
-                type="button"
-                className="w-full px-4 py-2 text-left text-white hover:bg-white/10 flex items-center gap-2"
-              >
-                <ExternalLink className="w-4 h-4" />
-                Open
-              </button>
-
-              <button
-                type="button"
-                className="w-full px-4 py-2 text-left text-red-400 hover:bg-red-500/20 flex items-center gap-2"
-              >
-                <Trash2 className="w-4 h-4" />
-                Delete
-              </button>
-            </motion.div>
-          )}
         </div>
       </div>
     </motion.div>
