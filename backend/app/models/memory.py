@@ -17,6 +17,7 @@ class Memory(Base):
     mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
     size_bytes: Mapped[int] = mapped_column(nullable=False)
     processing_status: Mapped[str] = mapped_column(String(50), nullable=False, default="uploaded", server_default="uploaded")
+    processing_stage: Mapped[str | None] = mapped_column(String(50), nullable=True, default="uploaded", server_default="uploaded")
     moderation_status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending", server_default="pending")
     ocr_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_: Mapped[dict] = mapped_column(JSONB, nullable=False, default={})
@@ -25,4 +26,5 @@ class Memory(Base):
 
     def __repr__(self) -> str:
         status = self.processing_status or "uploaded"
-        return f"<Memory(id={self.id}, filename={self.original_filename}, status={status})>"
+        stage = self.processing_stage or "uploaded"
+        return f"<Memory(id={self.id}, filename={self.original_filename}, status={status}, stage={stage})>"

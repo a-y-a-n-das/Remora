@@ -25,9 +25,9 @@ def get_database_url() -> str:
         raise RuntimeError("NEON_DATABASE_URL not configured")
     # Convert asyncpg URL to psycopg2 for synchronous migrations
     if url.startswith("postgresql+asyncpg://"):
-        url = url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+        url = url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
     elif url.startswith("postgresql://"):
-        url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+        url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
     return url
 
 

@@ -19,6 +19,7 @@ class DatabaseService:
         processing_status: str,
         error_message: Optional[str] = None,
         moderation_status: Optional[str] = None,
+        processing_stage: Optional[str] = None,
     ) -> bool:
         try:
             result = await db.execute(select(Memory).where(Memory.id == memory_id))
@@ -30,6 +31,8 @@ class DatabaseService:
             memory.processing_status = processing_status
             if moderation_status:
                 memory.moderation_status = moderation_status
+            if processing_stage:
+                memory.processing_stage = processing_stage
 
             await db.flush()
 
@@ -37,6 +40,7 @@ class DatabaseService:
                 "memory_status_updated",
                 memory_id=memory_id,
                 processing_status=processing_status,
+                processing_stage=processing_stage,
                 moderation_status=moderation_status,
             )
             return True
