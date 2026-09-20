@@ -62,6 +62,28 @@ function getStageIcon(stage?: string) {
   return <Loader2 className="w-3 h-3 animate-spin text-blue-300" />;
 }
 
+function ItemGridSkeleton() {
+  return (
+    <div
+      className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 xl:gap-4"
+      aria-label="Loading items"
+    >
+      {Array.from({ length: 10 }, (_, index) => (
+        <div
+          key={index}
+          className="overflow-hidden rounded-[10px] border border-[#263657] bg-[#0e172b]/80"
+        >
+          <div className="aspect-[1.36/1] animate-shimmer bg-[#172139]" />
+          <div className="space-y-3 p-3">
+            <div className="h-4 w-3/4 animate-shimmer rounded bg-[#172139]" />
+            <div className="h-3 w-1/3 animate-shimmer rounded bg-[#172139]" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 interface ItemCardProps {
   item: Item;
   onClick: () => void;
@@ -216,6 +238,7 @@ function startPolling(memoryId: string, pollFn: (signal: AbortSignal) => Promise
 export function AllItems() {
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const { items, mergeItems, addItem, updateItem, addInFlightMemory, removeInFlightMemory } = useAppStore();
 
   const toItem = useCallback((memory: Record<string, unknown>, imageUrl?: string): Item => {
@@ -363,6 +386,10 @@ export function AllItems() {
       } catch (error) {
         console.error('Failed to load memories', error);
         // Don't clear existing items on list failure - keep in-flight uploads visible
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
       }
     };
     void loadItems();
@@ -440,15 +467,34 @@ export function AllItems() {
 
       {/* Grid */}
       <div className="flex-1 overflow-y-auto px-6 pb-8 pt-7 lg:px-7">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 xl:gap-4">
-          {items.map((item) => (
-            <ItemCard
-              key={item.id}
-              item={item}
-              onClick={() => setSelectedItem(item)}
-            />
-          ))}
-        </div>
+        {isLoading && items.length === 0 ? (
+          <div
+            className="flex min-h-[420px] flex-col items-center justify-center gap-5"
+            role="status"
+            aria-live="polite"
+          >
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-accent/30 bg-accent/10">
+              <Loader2 className="h-7 w-7 animate-spin text-blue-300" />
+            </div>
+            <div className="space-y-1 text-center">
+              <p className="text-base font-medium text-white">Loading your items</p>
+              <p className="text-sm text-[#9aa9c8]">Getting your memories ready...</p>
+            </div>
+            <div className="w-full max-w-5xl">
+              <ItemGridSkeleton />
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 xl:gap-4">
+            {items.map((item) => (
+              <ItemCard
+                key={item.id}
+                item={item}
+                onClick={() => setSelectedItem(item)}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Item preview */}
