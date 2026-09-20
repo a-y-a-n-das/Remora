@@ -16,6 +16,7 @@ from app.schemas import (
 from app.services import (
     generate_memory_id,
     validate_file,
+    sanitize_filename,
     generate_presigned_upload_url,
     generate_presigned_download_url,
     voyage_embedding_service,
@@ -71,6 +72,7 @@ async def list_memories(db: AsyncSession = Depends(get_db)):
             size=memory.size_bytes,
             size_bytes=memory.size_bytes,
             processing_status=memory.processing_status,
+            processing_stage=memory.processing_stage,
             moderation_status=memory.moderation_status,
             s3_key=memory.s3_key,
             uploaded_at=memory.created_at,
@@ -85,19 +87,21 @@ async def init_upload(request: Request, upload_request: UploadInitRequest, db: A
     check_rate_limit(client_ip)
 
     try:
-        validate_file(upload_request.filename, upload_request.mime_type, upload_request.size_bytes)
+        # Sanitize filename
+        safe_filename = sanitize_filename(upload_request.filename)
+        validate_file(safe_filename, upload_request.mime_type, upload_request.size_bytes)
     except ValidationError as e:
         raise HTTPException(status_code=400, detail=e.message)
 
     memory_id = generate_memory_id()
     upload_url, s3_key, expires_in = await generate_presigned_upload_url(
-        memory_id, upload_request.filename, upload_request.mime_type
+        memory_id, safe_filename, upload_request.mime_type
     )
 
     memory = Memory(
         id=memory_id,
         s3_key=s3_key,
-        original_filename=upload_request.filename,
+        original_filename=safe_filename,
         mime_type=upload_request.mime_type,
         size_bytes=upload_request.size_bytes,
         processing_status="uploaded",
@@ -109,7 +113,7 @@ async def init_upload(request: Request, upload_request: UploadInitRequest, db: A
     logger.info(
         "upload_initialized",
         memory_id=memory_id,
-        filename=upload_request.filename,
+        filename=safe_filename,
         mime_type=upload_request.mime_type,
         size_bytes=upload_request.size_bytes,
         client_ip=client_ip,
@@ -133,6 +137,7 @@ async def get_memory_status(memory_id: str, db: AsyncSession = Depends(get_db)):
     return MemoryStatus(
         memory_id=memory.id,
         processing_status=memory.processing_status,
+        processing_stage=memory.processing_stage,
         moderation_status=memory.moderation_status,
         original_filename=memory.original_filename,
         mime_type=memory.mime_type,
@@ -164,7 +169,7 @@ async def search_memories(search_request: SearchRequest, db: AsyncSession = Depe
 
     limit = min(search_request.limit, 50)
 
-    # Generate query embedding using Voyage Multimodal 3.5
+    # Generate query embedding using Voyage Multimodal 3
     query_embedding = await voyage_embedding_service.get_text_embedding(query)
     if query_embedding is None:
         raise HTTPException(status_code=503, detail="Failed to generate query embedding")
@@ -222,7 +227,7 @@ async def query_memories(query_request: QueryRequest, db: AsyncSession = Depends
 
     limit = min(query_request.limit, 10)
 
-    # Generate query embedding using Voyage Multimodal 3.5
+    # Generate query embedding using Voyage Multimodal 3
     query_embedding = await voyage_embedding_service.get_text_embedding(query)
     if query_embedding is None:
         raise HTTPException(status_code=503, detail="Failed to generate query embedding")
@@ -274,14 +279,22 @@ async def query_memories(query_request: QueryRequest, db: AsyncSession = Depends
         })
 
     # Perform multimodal reasoning with Nemotron
-    answer = await nemotron_service.reason(query, enriched_memories)
+    answer, selected_memory_ids = await nemotron_service.reason(query, enriched_memories)
 
     if answer is None:
         raise HTTPException(status_code=503, detail="Reasoning service unavailable")
 
-    # Build source results
+    # Deduplicate selected_memory_ids while preserving order
+    seen = set()
+    unique_selected_ids = []
+    for mid in selected_memory_ids:
+        if mid not in seen:
+            seen.add(mid)
+            unique_selected_ids.append(mid)
+
+    # Build source results - ONLY include memories selected by Nemotron as relevant
     sources = []
-    for memory_id in memory_ids:
+    for memory_id in unique_selected_ids:
         memory = next((m for m in memories if m.id == memory_id), None)
         if not memory:
             continue

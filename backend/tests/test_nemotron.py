@@ -63,24 +63,27 @@ class TestNemotronService:
     @pytest.mark.asyncio
     async def test_reason_no_memories(self, nemotron_service):
         """Test reasoning with no memories returns appropriate message."""
-        answer = await nemotron_service.reason("What was the AWS invoice amount?", [])
+        answer, selected = await nemotron_service.reason("What was the AWS invoice amount?", [])
 
         assert answer is not None
         assert "couldn't find any relevant memories" in answer.lower()
+        assert selected == []
 
     @pytest.mark.asyncio
     async def test_reason_missing_api_key(self, nemotron_service):
         nemotron_service.settings.NVIDIA_API_KEY = ""
-        answer = await nemotron_service.reason("test query", [{"memory_id": "mem_1"}])
+        answer, selected = await nemotron_service.reason("test query", [{"memory_id": "mem_1"}])
 
         assert answer is None
+        assert selected == []
 
     @pytest.mark.asyncio
     async def test_reason_missing_model(self, nemotron_service):
         nemotron_service.settings.NEMOTRON_MODEL = ""
-        answer = await nemotron_service.reason("test query", [{"memory_id": "mem_1"}])
+        answer, selected = await nemotron_service.reason("test query", [{"memory_id": "mem_1"}])
 
         assert answer is None
+        assert selected == []
 
     @pytest.mark.asyncio
     async def test_reason_http_error(self, nemotron_service):
@@ -93,9 +96,10 @@ class TestNemotronService:
         mock_client.post.return_value = mock_response
         nemotron_service.set_client(AsyncMock(post=AsyncMock(return_value=mock_response)))
 
-        answer = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
+        answer, selected = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
 
         assert answer is None
+        assert selected == []
 
     @pytest.mark.asyncio
     async def test_reason_timeout(self, nemotron_service):
@@ -103,9 +107,10 @@ class TestNemotronService:
         mock_client.post.side_effect = httpx.TimeoutException("Request timed out")
         nemotron_service.set_client(mock_client)
 
-        answer = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
+        answer, selected = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
 
         assert answer is None
+        assert selected == []
 
     @pytest.mark.asyncio
     async def test_reason_malformed_response_no_choices(self, nemotron_service):
@@ -117,9 +122,10 @@ class TestNemotronService:
         mock_client.post.return_value = mock_response
         nemotron_service.set_client(AsyncMock(post=AsyncMock(return_value=mock_response)))
 
-        answer = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
+        answer, selected = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
 
         assert answer is None
+        assert selected == []
 
     @pytest.mark.asyncio
     async def test_reason_malformed_response_empty_choices(self, nemotron_service):
@@ -131,9 +137,10 @@ class TestNemotronService:
         mock_client.post.return_value = mock_response
         nemotron_service.set_client(AsyncMock(post=AsyncMock(return_value=mock_response)))
 
-        answer = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
+        answer, selected = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
 
         assert answer is None
+        assert selected == []
 
     @pytest.mark.asyncio
     async def test_reason_malformed_response_missing_content(self, nemotron_service):
@@ -145,9 +152,10 @@ class TestNemotronService:
         mock_client.post.return_value = mock_response
         nemotron_service.set_client(AsyncMock(post=AsyncMock(return_value=mock_response)))
 
-        answer = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
+        answer, selected = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
 
         assert answer is None
+        assert selected == []
 
     @pytest.mark.asyncio
     async def test_get_s3_image_base64_success(self, nemotron_service):
@@ -197,7 +205,7 @@ class TestNemotronService:
 
         assert len(messages) == 2
         assert messages[0]["role"] == "system"
-        assert "visual memory collection" in messages[0]["content"]
+        assert "memory collection" in messages[0]["content"]
         assert messages[1]["role"] == "user"
         assert "AWS invoice" in messages[1]["content"][0]["text"]
         assert "mem_1" in messages[1]["content"][1]["text"]

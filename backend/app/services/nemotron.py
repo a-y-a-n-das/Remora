@@ -1,7 +1,8 @@
 import base64
+import json
 import time
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 import httpx
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -128,16 +129,22 @@ class NemotronService:
         self,
         query: str,
         memories: List[Dict[str, Any]],
-    ) -> Optional[str]:
-        """Perform multimodal reasoning with Nemotron on the given query and memories."""
+    ) -> Tuple[Optional[str], List[str]]:
+        """Perform multimodal reasoning with Nemotron on the given query and memories.
+
+        Returns:
+            Tuple of (answer_text, selected_memory_ids).
+            If reasoning fails, returns (None, []).
+            If no memories are relevant, returns (answer, []).
+        """
         config_error = self._validate_config()
         if config_error:
             logger.error("nemotron_config_missing", error=config_error)
-            return None
+            return None, []
 
         if not memories:
             logger.info("nemotron_no_memories", query=query)
-            return "I couldn't find any relevant memories for your query."
+            return "I couldn't find any relevant memories for your query.", []
 
         start_time = time.time()
 
@@ -162,6 +169,7 @@ class NemotronService:
                 "max_tokens": 2048,
                 "temperature": 0.3,
                 "top_p": 0.9,
+                "response_format": {"type": "json_object"},
             }
 
             response = await self.client.post("/chat/completions", json=payload)
@@ -172,13 +180,45 @@ class NemotronService:
             choices = data.get("choices", [])
             if not choices:
                 logger.error("nemotron_no_choices_returned", model=self.settings.NEMOTRON_MODEL)
-                return None
+                return None, []
 
             message = choices[0].get("message", {})
             content = message.get("content")
             if content is None:
                 logger.error("nemotron_empty_content", response=data)
-                return None
+                return None, []
+
+            # Parse JSON response
+            try:
+                parsed = json.loads(content)
+                answer = parsed.get("answer", "").strip()
+                selected_memory_ids = parsed.get("selected_memory_ids", [])
+
+                # Validate selected_memory_ids is a list of strings
+                if not isinstance(selected_memory_ids, list):
+                    selected_memory_ids = []
+                else:
+                    selected_memory_ids = [str(mid) for mid in selected_memory_ids if isinstance(mid, (str, int))]
+
+                # Deduplicate while preserving order
+                seen = set()
+                unique_ids = []
+                for mid in selected_memory_ids:
+                    if mid not in seen:
+                        seen.add(mid)
+                        unique_ids.append(mid)
+                selected_memory_ids = unique_ids
+
+                # Validate answer
+                if not answer:
+                    logger.warning("nemotron_empty_answer", response=content)
+                    answer = "I couldn't find any relevant information in the provided memories."
+
+            except json.JSONDecodeError:
+                logger.warning("nemotron_non_json_response", content=content[:500])
+                # Fallback: treat as plain text answer, no memories selected
+                answer = content.strip()
+                selected_memory_ids = []
 
             duration_ms = int((time.time() - start_time) * 1000)
             logger.info(
@@ -187,23 +227,34 @@ class NemotronService:
                 duration_ms=duration_ms,
                 query_length=len(query),
                 num_memories=len(memories),
+                selected_count=len(selected_memory_ids),
             )
-            return content
+            return answer, selected_memory_ids
 
         except httpx.TimeoutException:
             logger.error("nemotron_timeout", model=self.settings.NEMOTRON_MODEL)
-            return None
+            return None, []
         except httpx.HTTPStatusError as e:
-            logger.error(
-                "nemotron_http_error",
-                model=self.settings.NEMOTRON_MODEL,
-                status_code=e.response.status_code,
-                response=e.response.text[:500],
-            )
-            return None
+            status_code = e.response.status_code
+            if status_code == 429:
+                logger.error("nemotron_rate_limited", model=self.settings.NEMOTRON_MODEL)
+            elif status_code >= 500:
+                logger.error(
+                    "nemotron_server_error",
+                    model=self.settings.NEMOTRON_MODEL,
+                    status_code=status_code,
+                )
+            else:
+                logger.error(
+                    "nemotron_http_error",
+                    model=self.settings.NEMOTRON_MODEL,
+                    status_code=status_code,
+                    response=e.response.text[:500],
+                )
+            return None, []
         except Exception as e:
             logger.error("nemotron_reasoning_failed", error=str(e))
-            return None
+            return None, []
 
 
 nemotron_service = NemotronService()

@@ -69,16 +69,16 @@ class VoyageEmbeddingService:
         try:
             image_b64 = base64.b64encode(image_bytes).decode("utf-8")
 
-            input_data = [{"image": image_b64}]
+            content = [{"type": "image_base64", "image_base64": f"data:image/jpeg;base64,{image_b64}"}]
             if text:
-                input_data.append({"text": text[:2048]})
+                content.insert(0, {"type": "text", "text": text[:2048]})
 
             payload = {
                 "model": self.settings.VOYAGE_MODEL,
-                "input": input_data,
+                "inputs": [{"content": content}],
             }
 
-            response = await self.client.post("/multimodal/embed", json=payload)
+            response = await self.client.post("/multimodalembeddings", json=payload)
             response.raise_for_status()
 
             data = response.json()
@@ -135,10 +135,10 @@ class VoyageEmbeddingService:
         try:
             payload = {
                 "model": self.settings.VOYAGE_MODEL,
-                "input": [{"text": text[:2048]}],
+                "inputs": [{"content": [{"type": "text", "text": text[:2048]}]}],
             }
 
-            response = await self.client.post("/multimodal/embed", json=payload)
+            response = await self.client.post("/multimodalembeddings", json=payload)
             response.raise_for_status()
 
             data = response.json()
