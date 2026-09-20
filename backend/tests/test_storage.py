@@ -1,11 +1,13 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+
+from app.core.config import Settings
 from app.services.storage import (
     generate_memory_id,
     get_s3_key,
     validate_file,
 )
-from app.core.config import Settings
 
 
 def test_generate_memory_id():
@@ -68,6 +70,8 @@ async def test_generate_presigned_upload_url():
     from app.services.storage import generate_presigned_upload_url
 
     mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = None
     mock_client.generate_presigned_url = AsyncMock(return_value="https://presigned-url.example.com")
 
     with patch("app.services.storage.get_async_s3_client", return_value=mock_client):
@@ -78,7 +82,9 @@ async def test_generate_presigned_upload_url():
                 MAX_FILE_SIZE_MB=10,
                 ALLOWED_MIME_TYPES=["image/jpeg"],
             )
-            url, s3_key, expires = await generate_presigned_upload_url("mem_test", "test.jpg", "image/jpeg")
+            url, s3_key, expires = await generate_presigned_upload_url(
+                "mem_test", "test.jpg", "image/jpeg"
+            )
 
     assert url == "https://presigned-url.example.com"
     assert s3_key == "memories/mem_test/original.jpg"
@@ -91,6 +97,8 @@ async def test_generate_presigned_download_url():
     from app.services.storage import generate_presigned_download_url
 
     mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = None
     mock_client.generate_presigned_url = AsyncMock(return_value="https://download-url.example.com")
 
     with patch("app.services.storage.get_async_s3_client", return_value=mock_client):

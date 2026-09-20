@@ -1,3 +1,4 @@
+import os
 import uuid
 from datetime import datetime, timedelta
 from app.core.aws_clients import get_s3_client, get_async_s3_client
@@ -18,6 +19,19 @@ ALLOWED_EXTENSIONS = {
 }
 
 
+def sanitize_filename(filename: str) -> str:
+    """Sanitize filename to prevent path traversal and remove dangerous characters."""
+    # Remove directory components
+    filename = os.path.basename(filename)
+    # Remove null bytes
+    filename = filename.replace("\x00", "")
+    # Limit length
+    if len(filename) > 255:
+        name, ext = os.path.splitext(filename)
+        filename = name[:255 - len(ext)] + ext
+    return filename
+
+
 def generate_memory_id() -> str:
     return f"mem_{uuid.uuid4().hex[:16]}"
 
@@ -30,16 +44,25 @@ def get_s3_key(memory_id: str, mime_type: str) -> str:
 def validate_file(filename: str, mime_type: str, size_bytes: int) -> None:
     settings = get_settings()
 
-    if mime_type not in settings.ALLOWED_MIME_TYPES:
-        raise ValidationError(
-            f"MIME type not allowed: {mime_type}",
-            details={"allowed_types": settings.ALLOWED_MIME_TYPES},
-        )
+    if not filename or not filename.strip():
+        raise ValidationError("Filename is required")
+
+    if not mime_type or not mime_type.strip():
+        raise ValidationError("MIME type is required")
+
+    if size_bytes <= 0:
+        raise ValidationError("File size must be greater than zero")
 
     if size_bytes > settings.max_file_size_bytes:
         raise ValidationError(
             f"File too large: {size_bytes} bytes (max {settings.max_file_size_bytes})",
             details={"max_size_mb": settings.MAX_FILE_SIZE_MB},
+        )
+
+    if mime_type not in settings.ALLOWED_MIME_TYPES:
+        raise ValidationError(
+            f"MIME type not allowed: {mime_type}",
+            details={"allowed_types": settings.ALLOWED_MIME_TYPES},
         )
 
 

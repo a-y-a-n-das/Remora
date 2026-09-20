@@ -1,16 +1,20 @@
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+
+from app.api import health, memories
 from app.core.config import get_settings
-from app.core.logging import configure_logging, get_logger
+from app.core.database import close_database, init_database
 from app.core.exceptions import (
     AppException,
     app_exception_handler,
-    http_exception_handler,
     generic_exception_handler,
+    http_exception_handler,
+    request_validation_exception_handler,
 )
-from app.core.database import init_database, close_database
-from app.api import health, memories
+from app.core.logging import configure_logging, get_logger
 
 logger = get_logger(__name__)
 
@@ -47,6 +51,7 @@ def create_app() -> FastAPI:
 
     app.add_exception_handler(AppException, app_exception_handler)
     app.add_exception_handler(HTTPException, http_exception_handler)
+    app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
     app.add_exception_handler(Exception, generic_exception_handler)
 
     app.include_router(health.router)

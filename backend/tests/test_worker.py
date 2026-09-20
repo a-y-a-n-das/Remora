@@ -1,14 +1,16 @@
-import pytest
 import json
+from contextlib import ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 from app.workers.s3_events import (
-    parse_s3_key,
+    S3EventParseError,
+    S3EventRecord,
     decode_s3_key,
     extract_s3_event_record,
-    parse_sqs_message_body,
     extract_s3_records_from_sqs_message,
-    S3EventRecord,
-    S3EventParseError,
+    parse_s3_key,
 )
 
 
@@ -96,14 +98,14 @@ class TestS3EventRecordExtraction:
             "eventTime": "2024-01-15T10:30:00.000Z",
             "eventName": "ObjectCreated:Put",
             "s3": {
-                "bucket": {"name": "remora-memory"},
-                "object": {"key": "memories/mem_abc123def456/original.jpg", "size": 1024}
-            }
+                "bucket": {"name": "remora-memories"},
+                "object": {"key": "memories/mem_abc123def456/original.jpg", "size": 1024},
+            },
         }
         event = extract_s3_event_record(record, "msg-123")
 
         assert event.message_id == "msg-123"
-        assert event.bucket == "remora-memory"
+        assert event.bucket == "remora-memories"
         assert event.key == "memories/mem_abc123def456/original.jpg"
         assert event.event_name == "ObjectCreated:Put"
         assert event.memory_id == "mem_abc123def456"
@@ -115,8 +117,8 @@ class TestS3EventRecordExtraction:
             "eventName": "ObjectCreated:Post",
             "s3": {
                 "bucket": {"name": "test-bucket"},
-                "object": {"key": "memories/mem_abcdef1234567890/original.png"}
-            }
+                "object": {"key": "memories/mem_abcdef1234567890/original.png"},
+            },
         }
         event = extract_s3_event_record(record, "msg-456")
         assert event.is_object_created is True
@@ -127,8 +129,8 @@ class TestS3EventRecordExtraction:
             "eventName": "ObjectCreated:Copy",
             "s3": {
                 "bucket": {"name": "test-bucket"},
-                "object": {"key": "memories/mem_abcdef1234567890/original.png"}
-            }
+                "object": {"key": "memories/mem_abcdef1234567890/original.png"},
+            },
         }
         event = extract_s3_event_record(record, "msg-789")
         assert event.is_object_created is True
@@ -139,8 +141,8 @@ class TestS3EventRecordExtraction:
             "eventName": "ObjectRemoved:Delete",
             "s3": {
                 "bucket": {"name": "test-bucket"},
-                "object": {"key": "memories/mem_abcdef1234567890/original.png"}
-            }
+                "object": {"key": "memories/mem_abcdef1234567890/original.png"},
+            },
         }
         event = extract_s3_event_record(record, "msg-999")
         assert event.is_object_created is False
@@ -151,8 +153,8 @@ class TestS3EventRecordExtraction:
             "eventName": "ObjectCreated:Put",
             "s3": {
                 "bucket": {"name": "test-bucket"},
-                "object": {"key": "memories/mem_abc1234567890abc/original%2Bfile.jpg"}
-            }
+                "object": {"key": "memories/mem_abc1234567890abc/original%2Bfile.jpg"},
+            },
         }
         event = extract_s3_event_record(record, "msg-111")
         assert event.key == "memories/mem_abc1234567890abc/original+file.jpg"
@@ -161,17 +163,14 @@ class TestS3EventRecordExtraction:
     def test_extract_missing_bucket_raises_error(self):
         record = {
             "eventName": "ObjectCreated:Put",
-            "s3": {"object": {"key": "memories/mem_abc123/original.jpg"}}
+            "s3": {"object": {"key": "memories/mem_abc123/original.jpg"}},
         }
         with pytest.raises(S3EventParseError) as exc_info:
             extract_s3_event_record(record, "msg-222")
         assert "Missing bucket" in str(exc_info.value)
 
     def test_extract_missing_key_raises_error(self):
-        record = {
-            "eventName": "ObjectCreated:Put",
-            "s3": {"bucket": {"name": "test-bucket"}}
-        }
+        record = {"eventName": "ObjectCreated:Put", "s3": {"bucket": {"name": "test-bucket"}}}
         with pytest.raises(S3EventParseError) as exc_info:
             extract_s3_event_record(record, "msg-333")
         assert "Missing object key" in str(exc_info.value)
@@ -181,8 +180,8 @@ class TestS3EventRecordExtraction:
             "eventName": "ObjectCreated:Put",
             "s3": {
                 "bucket": {"name": "test-bucket"},
-                "object": {"key": "uploads/mem_abc123/original.jpg"}
-            }
+                "object": {"key": "uploads/mem_abc123/original.jpg"},
+            },
         }
         with pytest.raises(S3EventParseError) as exc_info:
             extract_s3_event_record(record, "msg-444")
@@ -191,39 +190,45 @@ class TestS3EventRecordExtraction:
 
 class TestSQSMessageParsing:
     def test_parse_valid_sqs_message_with_records(self):
-        body = json.dumps({
-            "Records": [
-                {
-                    "eventName": "ObjectCreated:Put",
-                    "s3": {
-                        "bucket": {"name": "test-bucket"},
-                        "object": {"key": "memories/mem_abc123/original.jpg"}
+        body = json.dumps(
+            {
+                "Records": [
+                    {
+                        "eventName": "ObjectCreated:Put",
+                        "s3": {
+                            "bucket": {"name": "test-bucket"},
+                            "object": {"key": "memories/mem_abc123/original.jpg"},
+                        },
                     }
-                }
-            ]
-        })
-        message = {
-            "MessageId": "msg-111",
-            "ReceiptHandle": "receipt-111",
-            "Body": body
-        }
+                ]
+            }
+        )
+        message = {"MessageId": "msg-111", "ReceiptHandle": "receipt-111", "Body": body}
         records = extract_s3_records_from_sqs_message(message)
         assert len(records) == 1
         assert records[0].memory_id == "mem_abc123"
 
     def test_parse_sqs_message_multiple_records(self):
-        body = json.dumps({
-            "Records": [
-                {
-                    "eventName": "ObjectCreated:Put",
-                    "s3": {"bucket": {"name": "b"}, "object": {"key": "memories/mem_111/original.jpg"}}
-                },
-                {
-                    "eventName": "ObjectCreated:Post",
-                    "s3": {"bucket": {"name": "b"}, "object": {"key": "memories/mem_222/original.png"}}
-                }
-            ]
-        })
+        body = json.dumps(
+            {
+                "Records": [
+                    {
+                        "eventName": "ObjectCreated:Put",
+                        "s3": {
+                            "bucket": {"name": "b"},
+                            "object": {"key": "memories/mem_111/original.jpg"},
+                        },
+                    },
+                    {
+                        "eventName": "ObjectCreated:Post",
+                        "s3": {
+                            "bucket": {"name": "b"},
+                            "object": {"key": "memories/mem_222/original.png"},
+                        },
+                    },
+                ]
+            }
+        )
         message = {"MessageId": "msg-222", "Body": body}
         records = extract_s3_records_from_sqs_message(message)
         assert len(records) == 2
@@ -249,14 +254,19 @@ class TestSQSMessageParsing:
         assert "Invalid JSON" in str(exc_info.value)
 
     def test_parse_record_with_invalid_key_rejected(self):
-        body = json.dumps({
-            "Records": [
-                {
-                    "eventName": "ObjectCreated:Put",
-                    "s3": {"bucket": {"name": "b"}, "object": {"key": "uploads/mem_abc123/original.jpg"}}
-                }
-            ]
-        })
+        body = json.dumps(
+            {
+                "Records": [
+                    {
+                        "eventName": "ObjectCreated:Put",
+                        "s3": {
+                            "bucket": {"name": "b"},
+                            "object": {"key": "uploads/mem_abc123/original.jpg"},
+                        },
+                    }
+                ]
+            }
+        )
         message = {"MessageId": "msg-666", "Body": body}
         with pytest.raises(S3EventParseError):
             extract_s3_records_from_sqs_message(message)
@@ -270,14 +280,19 @@ class TestDuplicateEventSafety:
             assert memory_id == "mem_abc123def456"
 
     def test_duplicate_sqs_messages_produce_same_events(self):
-        body = json.dumps({
-            "Records": [
-                {
-                    "eventName": "ObjectCreated:Put",
-                    "s3": {"bucket": {"name": "b"}, "object": {"key": "memories/mem_abc123/original.jpg"}}
-                }
-            ]
-        })
+        body = json.dumps(
+            {
+                "Records": [
+                    {
+                        "eventName": "ObjectCreated:Put",
+                        "s3": {
+                            "bucket": {"name": "b"},
+                            "object": {"key": "memories/mem_abc123/original.jpg"},
+                        },
+                    }
+                ]
+            }
+        )
         message1 = {"MessageId": "msg-1", "Body": body}
         message2 = {"MessageId": "msg-2", "Body": body}
 
@@ -289,6 +304,50 @@ class TestDuplicateEventSafety:
 
 
 class TestProcessMemoryEvent:
+    @staticmethod
+    def _processing_patches():
+        from contextlib import asynccontextmanager
+
+        from app.workers import processor
+
+        @asynccontextmanager
+        async def db_session():
+            yield MagicMock(name="db")
+
+        return (
+            patch.object(processor, "get_db_session", db_session),
+            patch.object(
+                processor,
+                "download_image_from_s3",
+                new=AsyncMock(return_value=b"image-bytes"),
+            ),
+            patch.object(
+                processor.textract_service,
+                "extract_text",
+                return_value=None,
+            ),
+            patch.object(
+                processor.voyage_embedding_service,
+                "get_image_embedding",
+                new=AsyncMock(return_value=[0.0] * 1024),
+            ),
+            patch.object(
+                processor.s3_vectors_service,
+                "upsert_vector",
+                new=AsyncMock(return_value=True),
+            ),
+            patch.object(
+                processor.database_service,
+                "update_memory_status",
+                new=AsyncMock(return_value=True),
+            ),
+            patch.object(
+                processor.database_service,
+                "update_ocr_text",
+                new=AsyncMock(return_value=True),
+            ),
+        )
+
     @pytest.mark.asyncio
     async def test_process_memory_event_success(self):
         from app.workers.processor import process_memory_event
@@ -299,12 +358,15 @@ class TestProcessMemoryEvent:
             key="memories/mem_abc123/original.jpg",
             event_name="ObjectCreated:Put",
             memory_id="mem_abc123",
-            event_time="2024-01-15T10:30:00.000Z"
+            event_time="2024-01-15T10:30:00.000Z",
         )
 
-        with patch("app.workers.processor.logger") as mock_logger:
-            result = await process_memory_event(event)
-            assert result is True
+        with patch("app.workers.processor.logger"):
+            with ExitStack() as stack:
+                for context in self._processing_patches():
+                    stack.enter_context(context)
+                result = await process_memory_event(event)
+        assert result is True
 
     @pytest.mark.asyncio
     async def test_process_memory_event_is_idempotent(self):
@@ -316,10 +378,13 @@ class TestProcessMemoryEvent:
             key="memories/mem_abc123/original.jpg",
             event_name="ObjectCreated:Put",
             memory_id="mem_abc123",
-            event_time="2024-01-15T10:30:00.000Z"
+            event_time="2024-01-15T10:30:00.000Z",
         )
 
-        result1 = await process_memory_event(event)
-        result2 = await process_memory_event(event)
+        with ExitStack() as stack:
+            for context in self._processing_patches():
+                stack.enter_context(context)
+            result1 = await process_memory_event(event)
+            result2 = await process_memory_event(event)
         assert result1 is True
         assert result2 is True

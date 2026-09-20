@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     S3_VECTORS_DISTANCE_METRIC: str = Field(default="cosine")
     S3_VECTORS_MAX_RETRIES: int = Field(default=3)
 
+    # Worker processing
+    PROCESSING_STALE_THRESHOLD_SECONDS: int = Field(default=600)
+
     # NVIDIA Nemotron
     NVIDIA_API_KEY: str = Field(default="")
     NVIDIA_API_BASE: str = Field(default="https://integrate.api.nvidia.com/v1")
