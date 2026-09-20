@@ -18,7 +18,7 @@ class Memory(Base):
     size_bytes: Mapped[int] = mapped_column(nullable=False)
     processing_status: Mapped[str] = mapped_column(String(50), nullable=False, default="uploaded", server_default="uploaded")
     processing_stage: Mapped[str | None] = mapped_column(String(50), nullable=True, default="uploaded", server_default="uploaded")
-    moderation_status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending", server_default="pending")
+    moderation_status: Mapped[str] = mapped_column(String(50), nullable=False, default="not_applicable", server_default="not_applicable")
     ocr_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_: Mapped[dict] = mapped_column(JSONB, nullable=False, default={})
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

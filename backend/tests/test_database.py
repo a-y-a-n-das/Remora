@@ -146,7 +146,7 @@ class TestMemoryModel:
         
         assert "moderation_status" in columns
         assert columns["moderation_status"].type.length == 50
-        assert columns["moderation_status"].default.arg == "pending"
+        assert columns["moderation_status"].default.arg == "not_applicable"
         
         assert "ocr_text" in columns
         assert columns["ocr_text"].nullable

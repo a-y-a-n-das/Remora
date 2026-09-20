@@ -166,7 +166,7 @@ async def process_memory_event(event: S3EventRecord) -> bool:
             if not validate_stage_transition("indexing", "ready", allow_recovery=recovery_mode):
                 raise ProcessingError("Invalid stage transition: indexing -> ready", retryable=False)
             await database_service.update_memory_status(
-                db, memory_id, "ready", moderation_status="approved", processing_stage="ready"
+                db, memory_id, "ready", processing_stage="ready"
             )
 
             duration_ms = int((time.time() - start_time) * 1000)

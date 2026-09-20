@@ -18,6 +18,21 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: remora-worker
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: ["python", "-m", "app.workers.processor"]
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+
   frontend:
     build:
       context: ./frontend

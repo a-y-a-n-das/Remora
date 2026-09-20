@@ -57,6 +57,11 @@ export const memoriesApi = {
     const response = await api.post('/memories/query', { query, limit, conversation_history });
     return response.data;
   },
+
+  triggerProcessing: async (memoryId: string) => {
+    const response = await api.post(`/memories/${memoryId}/trigger-processing`);
+    return response.data;
+  },
 };
 
 export const healthApi = {

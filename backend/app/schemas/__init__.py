@@ -20,7 +20,6 @@ class MemoryStatus(BaseModel):
     memory_id: str
     processing_status: str
     processing_stage: Optional[str] = None
-    moderation_status: str
     original_filename: Optional[str] = None
     mime_type: Optional[str] = None
     size_bytes: Optional[int] = None
@@ -37,7 +36,6 @@ class MemoryListItem(BaseModel):
     size_bytes: int
     processing_status: str
     processing_stage: Optional[str] = None
-    moderation_status: str
     s3_key: str
     uploaded_at: Optional[datetime] = None
 

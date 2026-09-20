@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +30,7 @@ from app.services import (
 from app.core.logging import get_logger
 from app.core.exceptions import ValidationError
 from app.core.database import get_db
+from app.core.config import get_settings
 from app.models import Memory
 
 logger = get_logger(__name__)
@@ -75,7 +77,6 @@ async def list_memories(db: AsyncSession = Depends(get_db)):
             size_bytes=memory.size_bytes,
             processing_status=memory.processing_status,
             processing_stage=memory.processing_stage,
-            moderation_status=memory.moderation_status,
             s3_key=memory.s3_key,
             uploaded_at=memory.created_at,
         )
@@ -107,7 +108,7 @@ async def init_upload(request: Request, upload_request: UploadInitRequest, db: A
         mime_type=upload_request.mime_type,
         size_bytes=upload_request.size_bytes,
         processing_status="uploaded",
-        moderation_status="pending",
+        processing_stage="uploaded",
     )
     db.add(memory)
     await db.flush()
@@ -140,7 +141,6 @@ async def get_memory_status(memory_id: str, db: AsyncSession = Depends(get_db)):
         memory_id=memory.id,
         processing_status=memory.processing_status,
         processing_stage=memory.processing_stage,
-        moderation_status=memory.moderation_status,
         original_filename=memory.original_filename,
         mime_type=memory.mime_type,
         size_bytes=memory.size_bytes,
@@ -161,6 +161,79 @@ async def get_download_url(memory_id: str, db: AsyncSession = Depends(get_db)):
 
     download_url = await generate_presigned_download_url(memory.s3_key)
     return {"download_url": download_url}
+
+
+@router.post("/{memory_id}/trigger-processing")
+async def trigger_processing(memory_id: str, db: AsyncSession = Depends(get_db)):
+    """
+    Trigger processing for an uploaded memory.
+    Called by frontend after successful S3 upload to start the processing pipeline.
+    """
+    result = await db.execute(select(Memory).where(Memory.id == memory_id))
+    memory = result.scalar_one_or_none()
+    if not memory:
+        raise HTTPException(status_code=404, detail="Memory not found")
+
+    if memory.processing_status != "uploaded":
+        logger.info(
+            "trigger_processing_skipped_not_uploaded",
+            memory_id=memory_id,
+            current_status=memory.processing_status,
+        )
+        return {"status": "skipped", "reason": f"Memory status is {memory.processing_status}"}
+
+    if not memory.s3_key:
+        raise HTTPException(status_code=400, detail="Memory has no associated S3 key")
+
+    settings = get_settings()
+    if not settings.SQS_QUEUE_URL:
+        # No SQS configured - process directly
+        from app.workers.s3_events import S3EventRecord
+        from app.workers.processor import process_memory_event
+        from datetime import datetime, timezone
+
+        event = S3EventRecord(
+            message_id=f"trigger-{memory_id}",
+            bucket=settings.S3_BUCKET,
+            key=memory.s3_key,
+            event_name="ObjectCreated:Put",
+            memory_id=memory_id,
+            event_time=datetime.now(timezone.utc).isoformat(),
+        )
+
+        logger.info("trigger_processing_direct", memory_id=memory_id)
+        success = await process_memory_event(event)
+        return {"status": "processed" if success else "failed", "memory_id": memory_id}
+
+    # SQS configured - enqueue for worker
+    from app.core.aws_clients import get_async_sqs_client
+    import json
+
+    sqs_message = {
+        "Records": [
+            {
+                "eventVersion": "2.1",
+                "eventSource": "aws:s3",
+                "awsRegion": settings.AWS_REGION,
+                "eventTime": datetime.now(timezone.utc).isoformat(),
+                "eventName": "ObjectCreated:Put",
+                "s3": {
+                    "bucket": {"name": settings.S3_BUCKET},
+                    "object": {"key": memory.s3_key, "size": memory.size_bytes},
+                },
+            }
+        ]
+    }
+
+    client = get_async_sqs_client()
+    async with client as sqs:
+        await sqs.send_message(
+            QueueUrl=settings.SQS_QUEUE_URL,
+            MessageBody=json.dumps(sqs_message),
+        )
+
+    logger.info("trigger_processing_enqueued", memory_id=memory_id)
+    return {"status": "enqueued", "memory_id": memory_id}
 
 
 @router.post("/search", response_model=SearchResponse)

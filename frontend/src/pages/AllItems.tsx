@@ -395,7 +395,15 @@ export function AllItems() {
         // Step 3: Upload to S3 via presigned URL
         await memoriesApi.uploadToS3(initialized.upload_url, file);
 
-        // Step 4: Start status polling (persists across unmounts)
+        // Step 4: Trigger processing pipeline
+        try {
+          await memoriesApi.triggerProcessing(serverMemoryId);
+        } catch (triggerError) {
+          console.error(`Failed to trigger processing for ${file.name}`, triggerError);
+          // Don't fail the upload if trigger fails - polling will eventually pick it up
+        }
+
+        // Step 5: Start status polling (persists across unmounts)
         startPolling(serverMemoryId, (signal) => pollStatus(serverMemoryId, signal));
       } catch (error) {
         console.error(`Failed to upload ${file.name}`, error);

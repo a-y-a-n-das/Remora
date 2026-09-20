@@ -147,7 +147,6 @@ def test_get_memory_status_found(client, mock_db_session):
     mock_memory.id = "mem_test123"
     mock_memory.processing_status = "uploaded"
     mock_memory.processing_stage = "uploaded"
-    mock_memory.moderation_status = "pending"
     mock_memory.original_filename = "test.jpg"
     mock_memory.mime_type = "image/jpeg"
     mock_memory.size_bytes = 1024
@@ -163,8 +162,8 @@ def test_get_memory_status_found(client, mock_db_session):
     assert data["memory_id"] == "mem_test123"
     assert data["processing_status"] == "uploaded"
     assert data["processing_stage"] == "uploaded"
-    assert data["moderation_status"] == "pending"
     assert data["original_filename"] == "test.jpg"
+    assert "moderation_status" not in data
 
 
 def test_get_memory_status_not_found(client, mock_db_session):
@@ -184,7 +183,6 @@ def test_list_memories(client, mock_db_session):
     first_memory.size_bytes = 1024
     first_memory.processing_status = "ready"
     first_memory.processing_stage = "ready"
-    first_memory.moderation_status = "approved"
     first_memory.s3_key = "memories/mem_test123/original.jpg"
     first_memory.created_at = "2024-01-15T10:30:00Z"
 
@@ -195,7 +193,6 @@ def test_list_memories(client, mock_db_session):
     second_memory.size_bytes = 2048
     second_memory.processing_status = "processing"
     second_memory.processing_stage = "embedding"
-    second_memory.moderation_status = "pending"
     second_memory.s3_key = "memories/mem_test456/original.bin"
     second_memory.created_at = "2024-01-14T10:30:00Z"
 
@@ -218,7 +215,6 @@ def test_list_memories(client, mock_db_session):
             "size_bytes": 1024,
             "processing_status": "ready",
             "processing_stage": "ready",
-            "moderation_status": "approved",
             "s3_key": "memories/mem_test123/original.jpg",
             "uploaded_at": "2024-01-15T10:30:00Z",
         },
@@ -231,7 +227,6 @@ def test_list_memories(client, mock_db_session):
             "size_bytes": 2048,
             "processing_status": "processing",
             "processing_stage": "embedding",
-            "moderation_status": "pending",
             "s3_key": "memories/mem_test456/original.bin",
             "uploaded_at": "2024-01-14T10:30:00Z",
         },
@@ -297,7 +292,7 @@ def test_upload_init_creates_memory_record(client, mock_db_session, mock_setting
         assert added_memory.mime_type == "image/jpeg"
         assert added_memory.size_bytes == 1024 * 1024
         assert added_memory.processing_status == "uploaded"
-        assert added_memory.moderation_status == "pending"
+        assert added_memory.processing_stage == "uploaded"
         # s3_key is the mock's return value
         assert added_memory.s3_key == "memories/mem_abc123/original.jpg"
 
@@ -308,7 +303,6 @@ def test_memory_status_read_from_database(client, mock_db_session):
     mock_memory.id = "mem_status123"
     mock_memory.processing_status = "processing"
     mock_memory.processing_stage = "ocr"
-    mock_memory.moderation_status = "pending"
     mock_memory.original_filename = "status_test.jpg"
     mock_memory.mime_type = "image/jpeg"
     mock_memory.size_bytes = 2048
@@ -333,7 +327,6 @@ def test_processing_status_updates_persist(client, mock_db_session):
     mock_memory.id = "mem_update123"
     mock_memory.processing_status = "ready"
     mock_memory.processing_stage = "ready"
-    mock_memory.moderation_status = "approved"
     mock_memory.original_filename = "update_test.jpg"
     mock_memory.mime_type = "image/png"
     mock_memory.size_bytes = 4096
@@ -348,7 +341,7 @@ def test_processing_status_updates_persist(client, mock_db_session):
     data = response.json()
     assert data["processing_status"] == "ready"
     assert data["processing_stage"] == "ready"
-    assert data["moderation_status"] == "approved"
+    assert "moderation_status" not in data
 
 
 def test_search_memories_success(client, mock_db_session):
