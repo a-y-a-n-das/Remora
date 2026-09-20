@@ -3,7 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Send, FileText } from 'lucide-react';
 import { Button } from '../components/Button';
 import { useAppStore } from '../store';
-import { buildAssistantReply, mockItems } from '../data/mockData';
+import { memoriesApi } from '../lib/api';
+import type { Item } from '../types';
 
 function DocThumbnail() {
   return (
@@ -30,7 +31,7 @@ function ResultCard({
   item,
   onClick,
 }: {
-  item: typeof mockItems[0];
+  item: Item;
   onClick: () => void;
 }) {
   return (
@@ -68,7 +69,7 @@ function ItemPreview({
   item,
   onClose,
 }: {
-  item: typeof mockItems[0];
+  item: Item;
   onClose: () => void;
 }) {
   return (
@@ -137,9 +138,9 @@ function MessageBubble({
     role: 'user' | 'assistant';
     content: string;
     timestamp: Date;
-    results?: typeof mockItems;
+    results?: Item[];
   };
-  onItemClick: (item: typeof mockItems[0]) => void;
+  onItemClick: (item: Item) => void;
 }) {
   const isUser = msg.role === 'user';
 
@@ -192,48 +193,26 @@ export function SearchSession({
 }) {
   const {
     currentSession,
-    setCurrentSession,
     addMessage,
     addRecentSearch,
   } = useAppStore();
 
   const [followUp, setFollowUp] = useState('');
-  const [selectedItem, setSelectedItem] =
-    useState<typeof mockItems[0] | null>(null);
+  const [selectedItem, setSelectedItem] = useState<Item | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const initialized = useRef(false);
 
   useEffect(() => {
     if (initialized.current) return;
-    if (currentSession?.query === initialQuery) {
-      initialized.current = true;
-      return;
-    }
-
+    if (currentSession?.query !== initialQuery) return;
     initialized.current = true;
-
-    const userMsg = {
-      id: 'initial-user',
-      role: 'user' as const,
-      content: initialQuery,
-      timestamp: new Date(),
-    };
-
-    const assistantMsg = buildAssistantReply(initialQuery);
-
-    setCurrentSession({
-      id: Date.now().toString(),
-      query: initialQuery,
-      messages: [userMsg, assistantMsg],
-      createdAt: new Date(),
-    });
-
-    addRecentSearch(initialQuery);
+    void runQuery(initialQuery);
   }, [
     initialQuery,
     currentSession?.query,
-    setCurrentSession,
     addRecentSearch,
   ]);
 
@@ -243,7 +222,87 @@ export function SearchSession({
     });
   }, [currentSession?.messages?.length]);
 
-  const handleSend = (event: React.FormEvent) => {
+  const toItem = async (source: {
+    memory_id: string;
+    original_filename?: string | null;
+    mime_type?: string | null;
+    s3_key?: string | null;
+    size_bytes?: number | null;
+    uploaded_at?: string | null;
+  }): Promise<Item> => {
+    const isImage = source.mime_type?.startsWith('image/')
+      || /\.(jpe?g|png|webp|gif|heic|heif)$/i.test(source.s3_key ?? '');
+    let imageUrl: string | undefined;
+    if (isImage) {
+      try {
+        ({ download_url: imageUrl } = await memoriesApi.getDownloadUrl(source.memory_id));
+      } catch (downloadError) {
+        console.error(`Failed to load image URL for memory ${source.memory_id}`, downloadError);
+      }
+    }
+    const uploadedAt = source.uploaded_at ? new Date(source.uploaded_at) : new Date();
+    return {
+      id: source.memory_id,
+      name: source.original_filename ?? 'Untitled memory',
+      type: isImage ? 'image' : 'document',
+      date: Number.isNaN(uploadedAt.getTime()) ? 'Just now' : uploadedAt.toLocaleDateString(),
+      imageUrl,
+      size: source.size_bytes ?? undefined,
+      status: 'ready',
+    };
+  };
+
+  const runQuery = async (query: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      let response: {
+        answer?: string;
+        sources?: Array<{
+          memory_id: string;
+          original_filename?: string | null;
+          mime_type?: string | null;
+          s3_key?: string | null;
+          size_bytes?: number | null;
+          uploaded_at?: string | null;
+        }>;
+      };
+      try {
+        response = await memoriesApi.query(query);
+      } catch (queryError) {
+        console.warn(`Reasoning query failed for "${query}", falling back to vector search`, queryError);
+        const searchResponse = await memoriesApi.search(query);
+        response = {
+          answer: `I found ${searchResponse.results.length} matching memories.`,
+          sources: searchResponse.results,
+        };
+      }
+      const results = await Promise.all(
+        (response.sources ?? []).map((source: {
+          memory_id: string;
+          original_filename?: string | null;
+          mime_type?: string | null;
+          s3_key?: string | null;
+          size_bytes?: number | null;
+          uploaded_at?: string | null;
+        }) => toItem(source))
+      );
+      addMessage({
+        id: `assistant-${Date.now()}`,
+        role: 'assistant',
+        content: response.answer || `I found ${results.length} matching memories.`,
+        results,
+        timestamp: new Date(),
+      });
+    } catch (queryError) {
+      console.error(`Failed to query memories for "${query}"`, queryError);
+      setError('Unable to search your memories right now.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSend = async (event: React.FormEvent) => {
     event.preventDefault();
 
     const q = followUp.trim();
@@ -259,11 +318,9 @@ export function SearchSession({
       timestamp: new Date(),
     };
 
-    const assistantMsg = buildAssistantReply(q);
-
     addMessage(userMsg);
-    addMessage(assistantMsg);
     addRecentSearch(q);
+    await runQuery(q);
   };
 
   const messages = currentSession?.messages ?? [];
@@ -280,6 +337,13 @@ export function SearchSession({
               onItemClick={setSelectedItem}
             />
           ))}
+
+          {loading && (
+            <div className="mb-6 text-sm text-muted">Searching your memories...</div>
+          )}
+          {error && (
+            <div className="mb-6 text-sm text-error">{error}</div>
+          )}
 
           <div ref={bottomRef} />
         </div>

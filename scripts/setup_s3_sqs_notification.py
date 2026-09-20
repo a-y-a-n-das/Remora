@@ -21,6 +21,7 @@ The script will:
 
 import os
 import sys
+import json
 import boto3
 from botocore.config import Config
 
@@ -58,6 +59,29 @@ def main():
         )
         queue_arn = queue_attrs["Attributes"]["QueueArn"]
         print(f"SQS Queue ARN: {queue_arn}")
+
+        queue_policy = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "AllowS3Notification",
+                    "Effect": "Allow",
+                    "Principal": {"Service": "s3.amazonaws.com"},
+                    "Action": "sqs:SendMessage",
+                    "Resource": queue_arn,
+                    "Condition": {
+                        "ArnEquals": {
+                            "aws:SourceArn": f"arn:aws:s3:::{bucket}",
+                        }
+                    },
+                }
+            ],
+        }
+        sqs.set_queue_attributes(
+            QueueUrl=queue_url,
+            Attributes={"Policy": json.dumps(queue_policy)},
+        )
+        print("SUCCESS: Configured SQS policy for S3 notifications")
     except Exception as e:
         print(f"ERROR: Failed to get SQS queue ARN: {e}", file=sys.stderr)
         sys.exit(1)

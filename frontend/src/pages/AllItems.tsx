@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Upload,
@@ -8,6 +8,9 @@ import {
   Download,
   Trash2,
   ExternalLink,
+  CheckCircle,
+  XCircle,
+  Loader2,
 } from 'lucide-react';
 import { Button } from '../components/Button';
 import { UploadModal } from '../components/UploadModal';
@@ -34,6 +37,33 @@ function DocThumb() {
       </div>
     </div>
   );
+}
+
+function getStageLabel(stage?: string): string {
+  switch (stage) {
+    case 'uploaded':
+      return 'Uploaded';
+    case 'ocr':
+      return 'Reading document';
+    case 'embedding':
+      return 'Creating memory embedding';
+    case 'indexing':
+      return 'Indexing memory';
+    case 'ready':
+      return 'Ready';
+    case 'failed':
+      return 'Failed';
+    default:
+      return stage ?? '';
+  }
+}
+
+function getStageIcon(stage?: string) {
+  if (!stage) return null;
+  if (stage === 'ready') return <CheckCircle className="w-3 h-3 text-green-400" />;
+  if (stage === 'failed') return <XCircle className="w-3 h-3 text-red-400" />;
+  if (stage === 'uploaded') return <Upload className="w-3 h-3 text-blue-300" />;
+  return <Loader2 className="w-3 h-3 animate-spin text-blue-300" />;
 }
 
 interface ItemCardProps {
@@ -70,25 +100,44 @@ function ItemCard({ item, onClick }: ItemCardProps) {
             <FileText className="w-4 h-4 text-white" />
           )}
         </div>
+
+        {/* Status badge overlay */}
+        <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-sm rounded px-2 py-1 flex items-center gap-1">
+          {getStageIcon(item.processingStage)}
+          <span className="text-xs text-white font-medium">
+            {getStageLabel(item.processingStage)}
+          </span>
+        </div>
       </div>
 
-      <div className="p-3 flex justify-between items-start">
+      <div className="p-3 flex flex-col gap-2">
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-white truncate">
             {item.name}
           </p>
           <p className="text-xs text-gray-500 mt-1">{item.date}</p>
-          {item.status && (
-            <p className={`mt-1 text-xs ${
-              item.status === 'failed'
-                ? 'text-red-400'
-                : item.status === 'ready'
-                  ? 'text-green-400'
-                  : 'text-blue-300'
-            }`}>
-              {item.status === 'failed' ? 'Failed' : item.status === 'ready' ? 'Ready' : 'Processing'}
-            </p>
-          )}
+
+          {/* Single current status row */}
+          <p className="mt-1 text-xs flex items-center gap-1">
+            {item.status === 'ready' && (
+              <>
+                <CheckCircle className="w-3 h-3 text-green-400" />
+                <span className="text-green-400">Ready</span>
+              </>
+            )}
+            {item.status === 'failed' && (
+              <>
+                <XCircle className="w-3 h-3 text-red-400" />
+                <span className="text-red-400">Failed</span>
+              </>
+            )}
+            {item.status && item.status !== 'ready' && item.status !== 'failed' && (
+              <>
+                <Loader2 className="w-3 h-3 animate-spin text-blue-300" />
+                <span className="text-blue-300">{getStageLabel(item.processingStage)}</span>
+              </>
+            )}
+          </p>
         </div>
 
         <div className="relative">
@@ -101,7 +150,7 @@ function ItemCard({ item, onClick }: ItemCardProps) {
             className="p-1.5 text-gray-500 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
             aria-label="More options"
           >
-            <MoreHorizontal className="w-5 h-5" />
+            <MoreHorizontal className="w-5 w-5" />
           </button>
 
           {menuOpen && (
@@ -202,22 +251,30 @@ function ItemPreview({ item, onClose }: ItemPreviewProps) {
   );
 }
 
+// Module-level polling registry - persists across component mounts
+const globalPollingRegistry = new Map<string, AbortController>();
+
+function isPolling(memoryId: string): boolean {
+  return globalPollingRegistry.has(memoryId);
+}
+
+function startPolling(memoryId: string, pollFn: (signal: AbortSignal) => Promise<void>): void {
+  if (globalPollingRegistry.has(memoryId)) return;
+  const controller = new AbortController();
+  globalPollingRegistry.set(memoryId, controller);
+  void pollFn(controller.signal);
+}
+
 export function AllItems() {
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
-  const { items, setItems, addItem } = useAppStore();
-  const pollingIds = useRef(new Set<string>());
-
-  const updateItem = useCallback((id: string, update: Partial<Item>) => {
-    setItems(useAppStore.getState().items.map((item) =>
-      item.id === id ? { ...item, ...update } : item
-    ));
-  }, [setItems]);
+  const { items, mergeItems, addItem, updateItem, addInFlightMemory, removeInFlightMemory } = useAppStore();
 
   const toItem = useCallback((memory: Record<string, unknown>, imageUrl?: string): Item => {
     const name = String(memory.original_filename ?? memory.name ?? 'Untitled memory');
     const uploadedAt = memory.uploaded_at ? new Date(String(memory.uploaded_at)) : new Date();
     const status = String(memory.processing_status ?? memory.status ?? 'uploaded');
+    const processingStage = memory.processing_stage ? String(memory.processing_stage) : undefined;
     return {
       id: String(memory.memory_id ?? memory.id),
       name,
@@ -228,39 +285,103 @@ export function AllItems() {
       status: ['uploaded', 'processing', 'ready', 'failed'].includes(status)
         ? status as Item['status']
         : 'uploaded',
+      processingStage: processingStage as Item['processingStage'] | undefined,
     };
   }, []);
 
-  const pollStatus = useCallback(async (memoryId: string) => {
-    if (pollingIds.current.has(memoryId)) return;
-    pollingIds.current.add(memoryId);
+  const pollStatus = useCallback(async (memoryId: string, signal: AbortSignal) => {
+    // Define status hierarchy for backward transition prevention
+    const statusOrder = ['uploaded', 'processing', 'ready', 'failed'];
+    const getStatusRank = (status: string | undefined) => status ? statusOrder.indexOf(status) : -1;
+
+    // Exponential backoff configuration
+    const BASE_POLL_INTERVAL = 2000;
+    const MAX_POLL_INTERVAL = 30000;
+    const MAX_POLL_DURATION = 5 * 60 * 1000; // 5 minutes max
+    let pollInterval = BASE_POLL_INTERVAL;
+    let pollStartTime = Date.now();
+
     try {
-      while (true) {
+      while (!signal.aborted) {
+        // Check max polling duration
+        if (Date.now() - pollStartTime > MAX_POLL_DURATION) {
+          console.warn(`Max polling duration exceeded for memory ${memoryId}, marking as failed`);
+          updateItem(memoryId, { status: 'failed', processingStage: 'failed' });
+          removeInFlightMemory(memoryId);
+          break;
+        }
+
         const status = await memoriesApi.getStatus(memoryId);
         const processingStatus = String(status.processing_status);
-        updateItem(memoryId, {
-          status: ['uploaded', 'processing', 'ready', 'failed'].includes(processingStatus)
-            ? processingStatus as Item['status']
-            : 'processing',
-        });
+        const processingStage = status.processing_stage ? String(status.processing_stage) : undefined;
+
+        // Get current item to check for backward transition
+        const currentItem = useAppStore.getState().items.find((item) => item.id === memoryId);
+        if (currentItem) {
+          const currentRank = getStatusRank(currentItem.status);
+          const newRank = getStatusRank(processingStatus);
+          // Only update if new status is same or forward (not backward)
+          // Exception: allow failed from any state
+          if (newRank < currentRank && processingStatus !== 'failed') {
+            // Stale response - skip update
+          } else {
+            updateItem(memoryId, {
+              status: ['uploaded', 'processing', 'ready', 'failed'].includes(processingStatus)
+                ? processingStatus as Item['status']
+                : 'processing',
+              ...(processingStage ? { processingStage: processingStage as Item['processingStage'] } : {}),
+            });
+            // Reset backoff on successful status update
+            pollInterval = BASE_POLL_INTERVAL;
+          }
+        } else {
+          // No current item, safe to update
+          updateItem(memoryId, {
+            status: ['uploaded', 'processing', 'ready', 'failed'].includes(processingStatus)
+              ? processingStatus as Item['status']
+              : 'processing',
+            ...(processingStage ? { processingStage: processingStage as Item['processingStage'] } : {}),
+          });
+          pollInterval = BASE_POLL_INTERVAL;
+        }
 
         if (processingStatus === 'ready' || processingStatus === 'failed') {
           if (processingStatus === 'ready') {
             const { download_url: imageUrl } = await memoriesApi.getDownloadUrl(memoryId);
             updateItem(memoryId, { imageUrl });
           }
+          removeInFlightMemory(memoryId);
           break;
         }
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+
+        // Exponential backoff with jitter
+        try {
+          await new Promise((resolve, reject) => {
+            const timeout = setTimeout(resolve, pollInterval);
+            signal.addEventListener('abort', () => {
+              clearTimeout(timeout);
+              reject(new Error('Aborted'));
+            });
+          });
+        } catch {
+          break;
+        }
+
+        // Increase interval for next poll (exponential backoff with cap)
+        pollInterval = Math.min(pollInterval * 1.5, MAX_POLL_INTERVAL);
       }
     } catch (error) {
-      console.error(`Failed to poll memory ${memoryId}`, error);
-      updateItem(memoryId, { status: 'failed' });
+      if ((error as Error).name !== 'AbortError') {
+        console.error(`Failed to poll memory ${memoryId}`, error);
+        updateItem(memoryId, { status: 'failed', processingStage: 'failed' });
+        removeInFlightMemory(memoryId);
+      }
     } finally {
-      pollingIds.current.delete(memoryId);
+      globalPollingRegistry.delete(memoryId);
     }
-  }, [updateItem]);
+  }, [updateItem, removeInFlightMemory]);
 
+  // Load items on mount - merge with any existing in-flight uploads
   useEffect(() => {
     let cancelled = false;
     const loadItems = async () => {
@@ -275,62 +396,65 @@ export function AllItems() {
               return { ...item, imageUrl };
             } catch (error) {
               console.error(`Failed to load image URL for memory ${item.id}`, error);
+              // Keep item without imageUrl - will be retried on next poll
             }
           }
           return item;
         }));
         if (!cancelled) {
-          setItems(loadedItems);
+          mergeItems(loadedItems);
+          // Start polling for any items that are still in-flight
           loadedItems
             .filter((item) => item.status !== 'ready' && item.status !== 'failed')
-            .forEach((item) => void pollStatus(item.id));
+            .forEach((item) => {
+              if (!isPolling(item.id)) {
+                startPolling(item.id, (signal) => pollStatus(item.id, signal));
+              }
+            });
         }
       } catch (error) {
         console.error('Failed to load memories', error);
+        // Don't clear existing items on list failure - keep in-flight uploads visible
       }
     };
     void loadItems();
     return () => {
       cancelled = true;
     };
-  }, [pollStatus, setItems, toItem]);
+  }, [mergeItems, pollStatus, toItem]);
 
   const handleUpload = useCallback(async (files: File[]) => {
     for (const file of files) {
-      const localId = `upload-${file.name}-${file.lastModified}`;
-      let memoryId = localId;
-      addItem({
-        id: localId,
-        name: file.name,
-        type: file.type.startsWith('image/') ? 'image' : 'document',
-        date: 'Just now',
-        imageUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
-        size: file.size,
-        status: 'processing',
-      });
-
       try {
+        // Step 1: Initialize upload - get server memory_id first
         const initialized = await memoriesApi.upload(file);
+        const serverMemoryId = initialized.memory_id;
+
+        // Step 2: Create item with server memory_id as permanent identity
         const item: Item = {
-          ...toItem(initialized, file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined),
+          id: serverMemoryId,
           name: file.name,
           type: file.type.startsWith('image/') ? 'image' : 'document',
           date: 'Just now',
+          imageUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
           size: file.size,
-          status: 'processing',
+          status: 'uploaded',
         };
-        memoryId = item.id;
-        setItems(useAppStore.getState().items.map((existing) =>
-          existing.id === localId ? item : existing
-        ));
+        addItem(item);
+        addInFlightMemory(serverMemoryId);
+
+        // Step 3: Upload to S3 via presigned URL
         await memoriesApi.uploadToS3(initialized.upload_url, file);
-        void pollStatus(item.id);
+
+        // Step 4: Start status polling (persists across unmounts)
+        startPolling(serverMemoryId, (signal) => pollStatus(serverMemoryId, signal));
       } catch (error) {
         console.error(`Failed to upload ${file.name}`, error);
-        updateItem(memoryId, { status: 'failed' });
+        // Note: If upload init fails, we don't have a server memory_id yet
+        // The item was never added, so nothing to clean up
       }
     }
-  }, [addItem, pollStatus, setItems, toItem, updateItem]);
+  }, [addItem, addInFlightMemory, pollStatus]);
 
   return (
     <div className="flex-1 h-full flex flex-col bg-bg overflow-hidden">

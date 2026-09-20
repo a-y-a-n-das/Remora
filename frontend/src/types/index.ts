@@ -1,3 +1,5 @@
+export type ProcessingStage = 'uploaded' | 'ocr' | 'embedding' | 'indexing' | 'ready' | 'failed';
+
 export interface Item {
   id: string;
   name: string;
@@ -6,6 +8,7 @@ export interface Item {
   imageUrl?: string;
   size?: number;
   status?: 'uploaded' | 'processing' | 'ready' | 'failed';
+  processingStage?: ProcessingStage;
 }
 
 export interface ChatMessage {

@@ -49,6 +49,11 @@ export const memoriesApi = {
   },
 
   search: async (query: string, limit = 10) => {
+    const response = await api.post('/memories/search', { query, limit });
+    return response.data;
+  },
+
+  query: async (query: string, limit = 5) => {
     const response = await api.post('/memories/query', { query, limit });
     return response.data;
   },

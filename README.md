@@ -31,7 +31,7 @@ It combines OCR, multimodal embeddings, vector retrieval, and multimodal
 reasoning in one focused workflow:
 
 1. **Upload** an image or document through the web UI.
-2. **Understand** the file with AWS Textract and Voyage Multimodal 3.5.
+2. **Understand** the file with AWS Textract and Voyage Multimodal 3.
 3. **Store** the original file in S3, metadata and OCR in Neon PostgreSQL,
    and embeddings in S3 Vectors.
 4. **Ask** a natural-language question about the collection.
@@ -76,7 +76,7 @@ flowchart TB
 
     subgraph AI["Managed AI Services"]
         Textract[AWS Textract]
-        Voyage[Voyage Multimodal 3.5]
+        Voyage[Voyage Multimodal 3]
         Nemotron[NVIDIA Nemotron]
     end
 
@@ -126,7 +126,7 @@ flowchart TB
     E[(Amazon S3 original file)]
     F[AWS Textract OCR]
     G[OCR text]
-    H[Voyage Multimodal 3.5]
+    H[Voyage Multimodal 3]
     I[(Neon PostgreSQL)]
     J[(Amazon S3 Vectors)]
     K[Memory status: Processing → Ready or Failed]
@@ -214,7 +214,7 @@ context, then the API returns a grounded answer and source memories.
 | OCR | AWS Textract |
 | Metadata and OCR database | Neon PostgreSQL |
 | Vector database | Amazon S3 Vectors |
-| Embeddings | Voyage Multimodal 3.5, 1024 dimensions |
+| Embeddings | Voyage Multimodal 3 (`voyage-multimodal-3`), 1024 dimensions |
 | Multimodal reasoning | NVIDIA Nemotron 3 Nano Omni 30B A3B |
 | Backend testing | pytest, pytest-asyncio, httpx |
 

@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Item, ChatMessage, SearchSession } from '../types';
-import { buildAssistantReply } from '../data/mockData';
 
 interface AppState {
   // Sidebar
@@ -16,8 +15,15 @@ interface AppState {
   // Items
   items: Item[];
   setItems: (items: Item[]) => void;
+  mergeItems: (items: Item[]) => void;
   addItem: (item: Item) => void;
+  updateItem: (id: string, update: Partial<Item>) => void;
   deleteItem: (id: string) => void;
+
+  // In-flight uploads tracking
+  inFlightMemoryIds: Set<string>;
+  addInFlightMemory: (id: string) => void;
+  removeInFlightMemory: (id: string) => void;
 
   // Search/Chat
   currentSession: SearchSession | null;
@@ -59,7 +65,6 @@ export const useAppStore = create<AppState>()(
                 content: trimmed,
                 timestamp: new Date(),
               },
-              buildAssistantReply(trimmed),
             ],
             createdAt: new Date(),
           },
@@ -70,8 +75,40 @@ export const useAppStore = create<AppState>()(
       // Items
       items: [],
       setItems: (items) => set({ items }),
+      mergeItems: (serverItems) =>
+        set((state) => {
+          // Merge server items with local items, preserving in-flight uploads
+          const inFlightIds = state.inFlightMemoryIds;
+          const localItems = state.items.filter((item) => inFlightIds.has(item.id));
+          const serverItemsMap = new Map(serverItems.map((item) => [item.id, item]));
+          const merged = [...serverItems];
+          // Add any in-flight items not already in server response
+          for (const item of localItems) {
+            if (!serverItemsMap.has(item.id)) {
+              merged.unshift(item);
+            }
+          }
+          return { items: merged };
+        }),
       addItem: (item) => set((state) => ({ items: [item, ...state.items] })),
+      updateItem: (id, update) =>
+        set((state) => ({
+          items: state.items.map((item) => (item.id === id ? { ...item, ...update } : item)),
+        })),
       deleteItem: (id) => set((state) => ({ items: state.items.filter((i) => i.id !== id) })),
+
+      // In-flight uploads tracking
+      inFlightMemoryIds: new Set(),
+      addInFlightMemory: (id) =>
+        set((state) => ({
+          inFlightMemoryIds: new Set(state.inFlightMemoryIds).add(id),
+        })),
+      removeInFlightMemory: (id) =>
+        set((state) => {
+          const next = new Set(state.inFlightMemoryIds);
+          next.delete(id);
+          return { inFlightMemoryIds: next };
+        }),
 
       // Search/Chat
       currentSession: null,
@@ -144,6 +181,7 @@ export const useAppStore = create<AppState>()(
         recentSearches: state.recentSearches,
         items: state.items,
         sidebarCollapsed: state.sidebarCollapsed,
+        // Don't persist inFlightMemoryIds - they're session-specific
       }),
     }
   )
