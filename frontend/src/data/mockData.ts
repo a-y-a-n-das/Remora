@@ -128,10 +128,17 @@ export const recentSearches = [
 ];
 
 export const searchSuggestions = [
-  '"Find the AWS bill where I paid ₹2,499"',
-  '"Find the product I was looking at"',
-  '"Which receipt has this item?"',
-  '"Show me the images related to my trip"',
+  'What did I spend on my recent purchases?',
+  'What is the total amount on this receipt?',
+  'When does my car insurance expire?',
+  'What is my insurance policy number?',
+  'What are the details of my upcoming trip?',
+  'What is the booking or ticket number?',
+  'What was the most recent payment I made?',
+  'What are the important dates in my documents?',
+  'Can you find my vehicle registration details?',
+  'What did I buy recently?',
+  'Find the details I need from my documents.',
 ];
 
 export function makeSearchResults(query: string): Item[] {

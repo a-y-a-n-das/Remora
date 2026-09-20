@@ -4,58 +4,26 @@ import { RemoraIcon } from '../components/Logo';
 import { Input } from '../components/Input';
 import { useAppStore } from '../store';
 
-function generateSuggestions(memories: Array<{ name: string; date: string }>): string[] {
-  if (memories.length === 0) {
-    return [
-      '"Find the AWS bill"',
-      '"Find the product I was looking at"',
-      '"Which receipt has this item?"',
-      '"Show me images from my trip"',
-    ];
-  }
-
-  const suggestions = new Set<string>();
-  
-  // Generate suggestions based on actual memory filenames and types
-  memories.forEach((mem) => {
-    const name = mem.name.toLowerCase();
-    
-    if (name.includes('bill') || name.includes('invoice') || name.includes('receipt')) {
-      suggestions.add(`"Find the ${mem.name.replace(/\.[^/.]+$/, '')}"`);
-    }
-    if (name.includes('trip') || name.includes('travel') || name.includes('flight')) {
-      suggestions.add(`"Show me images from ${mem.name.replace(/\.[^/.]+$/, '')}"`);
-    }
-    if (name.includes('product') || name.includes('unboxing') || name.includes('review')) {
-      suggestions.add(`"Find the product ${mem.name.replace(/\.[^/.]+$/, '')}"`);
-    }
-    if (name.includes('project') || name.includes('plan') || name.includes('design')) {
-      suggestions.add(`"Find the project ${mem.name.replace(/\.[^/.]+$/, '')}"`);
-    }
-  });
-
-  // Add generic useful suggestions
-  suggestions.add('"Find my latest receipts"');
-  suggestions.add('"Show me all screenshots"');
-  suggestions.add('"Find documents from last month"');
-  suggestions.add('"What did I save about AWS?"');
-
-  return Array.from(suggestions).slice(0, 8);
-}
+const suggestions = [
+  'What did I spend on my recent purchases?',
+  'What is the total amount on this receipt?',
+  'When does my car insurance expire?',
+  'What is my insurance policy number?',
+  'What are the details of my upcoming trip?',
+  'What is the booking or ticket number?',
+  'What was the most recent payment I made?',
+  'What are the important dates in my documents?',
+  'Can you find my vehicle registration details?',
+  'What did I buy recently?',
+  'Find the details I need from my documents.',
+];
 
 export function Home() {
-  const { startSearch, items } = useAppStore();
+  const { startSearch } = useAppStore();
   const [query, setQuery] = useState('');
   const [suggIdx, setSuggIdx] = useState(0);
   const [suggKey, setSuggKey] = useState(0);
-  const [suggestions, setSuggestions] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
-
-  // Generate real suggestions from actual memories
-  useEffect(() => {
-    const suggestionsList = generateSuggestions(items);
-    setSuggestions(suggestionsList);
-  }, [items]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -73,8 +41,7 @@ export function Home() {
 
   const fillSuggestion = () => {
     if (suggestions.length === 0) return;
-    const clean = suggestions[suggIdx].replace(/"/g, '');
-    setQuery(clean);
+    setQuery(suggestions[suggIdx]);
   };
 
   const handleSearch = (e: React.FormEvent) => {
