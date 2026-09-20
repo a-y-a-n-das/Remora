@@ -22,7 +22,7 @@ function DocThumb() {
   return (
     <div className="w-full h-full bg-[#dfe4f2] p-3 text-[#27324a]">
       <div className="h-full rounded-[3px] bg-[#f6f7fb] px-3 py-2 shadow-inner">
-        <div className="text-[11px] font-bold tracking-tight">amazon.in</div>
+        <div className="text-[11px] font-bold tracking-tight text-[#6b7ca8]">Document</div>
         <div className="mt-2 h-px bg-[#b8c1d4]" />
         <div className="mt-2 grid grid-cols-2 gap-1">
           {[0, 1, 2, 3, 4, 5].map((index) => (
