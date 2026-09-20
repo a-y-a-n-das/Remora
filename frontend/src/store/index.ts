@@ -1,6 +1,11 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Item, ChatMessage, SearchSession } from '../types';
+import type {
+  Item,
+  ChatMessage,
+  ChatSession,
+  SearchSession,
+} from '../types';
 
 interface AppState {
   // Sidebar
@@ -10,7 +15,7 @@ interface AppState {
   // Recent searches
   recentSearches: string[];
   addRecentSearch: (query: string) => void;
-  startSearch: (query: string) => void;
+  startSearch: (query: string) => string;
 
   // Items
   items: Item[];
@@ -25,9 +30,28 @@ interface AppState {
   addInFlightMemory: (id: string) => void;
   removeInFlightMemory: (id: string) => void;
 
-  // Search/Chat
+  // Chat sessions
+  sessions: Record<string, ChatSession>;
+  activeSessionId: string | null;
+  createSession: (query: string) => string;
+  createEmptySession: () => string;
+  addMessageToSession: (
+    sessionId: string,
+    message: ChatMessage,
+  ) => void;
+  updateSessionTitle: (
+    sessionId: string,
+    title: string,
+  ) => void;
+  deleteSession: (sessionId: string) => void;
+  setActiveSession: (sessionId: string | null) => void;
+  getActiveSession: () => ChatSession | null;
+
+  // Legacy compatibility
   currentSession: SearchSession | null;
-  setCurrentSession: (session: SearchSession | null) => void;
+  setCurrentSession: (
+    session: SearchSession | null,
+  ) => void;
   addMessage: (message: ChatMessage) => void;
   addUserQuery: (query: string) => void;
 
@@ -36,153 +60,652 @@ interface AppState {
   toggleSidebar: () => void;
 }
 
+/**
+ * Generate a unique client-side session ID.
+ */
+function generateSessionId(): string {
+  return (
+    Date.now().toString(36) +
+    '-' +
+    Math.random().toString(36).substring(2, 10)
+  );
+}
+
+/**
+ * Generate a short human-readable chat title.
+ */
+function generateTitle(query: string): string {
+  const trimmed = query.trim();
+
+  if (!trimmed) {
+    return 'New Chat';
+  }
+
+  return trimmed.length > 50
+    ? `${trimmed.substring(0, 50)}…`
+    : trimmed;
+}
+
+/**
+ * Current timestamp as an ISO string.
+ */
+function getUpdatedAt(): string {
+  return new Date().toISOString();
+}
+
+/**
+ * Convert canonical ChatSession into the SearchSession shape
+ * expected by older components.
+ *
+ * Both session types use ISO timestamp strings.
+ */
+function toLegacySearchSession(
+  session: ChatSession | null,
+): SearchSession | null {
+  if (!session) {
+    return null;
+  }
+
+  return {
+    id: session.id,
+    title: session.title,
+    query: session.query || '',
+    messages: session.messages,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+  };
+}
+
+/**
+ * Build a new ChatSession.
+ *
+ * IMPORTANT:
+ * session.id, the sessions map key, and activeSessionId
+ * all use the same generated ID.
+ */
+function buildSession(query = ''): {
+  sessionId: string;
+  session: ChatSession;
+} {
+  const trimmed = query.trim();
+  const sessionId = generateSessionId();
+  const now = getUpdatedAt();
+
+  const messages: ChatMessage[] = trimmed
+    ? [
+        {
+          id: `${sessionId}-user`,
+          role: 'user',
+          content: trimmed,
+          timestamp: new Date(),
+        },
+      ]
+    : [];
+
+  const session: SearchSession = {
+    id: sessionId,
+    title: trimmed
+      ? generateTitle(trimmed)
+      : 'New Chat',
+    query: trimmed,
+    messages,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  return {
+    sessionId,
+    session,
+  };
+}
+
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
+      // ============================================================
       // Sidebar
-      activeView: 'home',
-      setActiveView: (view) => set({ activeView: view }),
+      // ============================================================
 
+      activeView: 'home',
+
+      setActiveView: (view) =>
+        set({
+          activeView: view,
+        }),
+
+      // ============================================================
       // Recent searches
+      // ============================================================
+
       recentSearches: [],
+
       addRecentSearch: (query) =>
         set((state) => {
-          const filtered = state.recentSearches.filter((s) => s !== query);
-          return { recentSearches: [query, ...filtered].slice(0, 8) };
+          const trimmed = query.trim();
+
+          if (!trimmed) {
+            return state;
+          }
+
+          const filtered =
+            state.recentSearches.filter(
+              (search) => search !== trimmed,
+            );
+
+          return {
+            recentSearches: [
+              trimmed,
+              ...filtered,
+            ].slice(0, 8),
+          };
         }),
-      startSearch: (query) => {
+
+      /**
+       * Start a NEW chat with the supplied initial query.
+       */
+      startSearch: (query: string) => {
         const trimmed = query.trim();
-        if (!trimmed) return;
-        set({
+
+        if (!trimmed) {
+          return '';
+        }
+
+        const { sessionId, session } =
+          buildSession(trimmed);
+
+        set((state) => ({
           activeView: 'search',
-          currentSession: {
-            id: Date.now().toString(),
-            query: trimmed,
-            messages: [
-              {
-                id: `${Date.now()}-user`,
-                role: 'user',
-                content: trimmed,
-                timestamp: new Date(),
-              },
-            ],
-            createdAt: new Date(),
+          activeSessionId: sessionId,
+
+          sessions: {
+            ...state.sessions,
+            [sessionId]: session,
           },
-        });
+
+          currentSession:
+            toLegacySearchSession(session),
+        }));
+
         get().addRecentSearch(trimmed);
+
+        return sessionId;
       },
 
+      // ============================================================
       // Items
+      // ============================================================
+
       items: [],
-      setItems: (items) => set({ items }),
+
+      setItems: (items) =>
+        set({
+          items,
+        }),
+
       mergeItems: (serverItems) =>
         set((state) => {
-          // Merge server items with local items, preserving in-flight uploads
-          const inFlightIds = state.inFlightMemoryIds;
-          const localItems = state.items.filter((item) => inFlightIds.has(item.id));
-          const serverItemsMap = new Map(serverItems.map((item) => [item.id, item]));
+          const inFlightIds =
+            state.inFlightMemoryIds;
+
+          const localItems = state.items.filter(
+            (item) => inFlightIds.has(item.id),
+          );
+
+          const serverItemsMap = new Map(
+            serverItems.map((item) => [
+              item.id,
+              item,
+            ]),
+          );
+
           const merged = [...serverItems];
-          // Add any in-flight items not already in server response
+
           for (const item of localItems) {
             if (!serverItemsMap.has(item.id)) {
               merged.unshift(item);
             }
           }
-          return { items: merged };
+
+          return {
+            items: merged,
+          };
         }),
-      addItem: (item) => set((state) => ({ items: [item, ...state.items] })),
+
+      addItem: (item) =>
+        set((state) => ({
+          items: [item, ...state.items],
+        })),
+
       updateItem: (id, update) =>
         set((state) => ({
-          items: state.items.map((item) => (item.id === id ? { ...item, ...update } : item)),
+          items: state.items.map((item) =>
+            item.id === id
+              ? {
+                  ...item,
+                  ...update,
+                }
+              : item,
+          ),
         })),
-      deleteItem: (id) => set((state) => ({ items: state.items.filter((i) => i.id !== id) })),
 
-      // In-flight uploads tracking
-      inFlightMemoryIds: new Set(),
+      deleteItem: (id) =>
+        set((state) => ({
+          items: state.items.filter(
+            (item) => item.id !== id,
+          ),
+        })),
+
+      // ============================================================
+      // In-flight uploads
+      // ============================================================
+
+      inFlightMemoryIds: new Set<string>(),
+
       addInFlightMemory: (id) =>
         set((state) => ({
-          inFlightMemoryIds: new Set(state.inFlightMemoryIds).add(id),
+          inFlightMemoryIds: new Set(
+            state.inFlightMemoryIds,
+          ).add(id),
         })),
+
       removeInFlightMemory: (id) =>
         set((state) => {
-          const next = new Set(state.inFlightMemoryIds);
+          const next = new Set(
+            state.inFlightMemoryIds,
+          );
+
           next.delete(id);
-          return { inFlightMemoryIds: next };
-        }),
 
-      // Search/Chat
-      currentSession: null,
-      setCurrentSession: (session) => set({ currentSession: session }),
-      addMessage: (message: ChatMessage) =>
-        set((state) => {
-          if (!state.currentSession) return state;
           return {
-            currentSession: {
-              ...state.currentSession,
-              messages: [...state.currentSession.messages, { ...message, id: Date.now().toString(), timestamp: new Date() }],
-            },
+            inFlightMemoryIds: next,
           };
         }),
-      addUserQuery: (query: string) =>
+
+      // ============================================================
+      // Chat sessions
+      // ============================================================
+
+      sessions: {},
+
+      activeSessionId: null,
+
+      /**
+       * Create a NEW chat with an initial query.
+       */
+      createSession: (query: string) => {
+        const trimmed = query.trim();
+
+        if (!trimmed) {
+          return '';
+        }
+
+        const { sessionId, session } =
+          buildSession(trimmed);
+
+        set((state) => ({
+          activeView: 'search',
+          activeSessionId: sessionId,
+
+          sessions: {
+            ...state.sessions,
+            [sessionId]: session,
+          },
+
+          currentSession:
+            toLegacySearchSession(session),
+        }));
+
+        get().addRecentSearch(trimmed);
+
+        return sessionId;
+      },
+
+      /**
+       * Create an empty chat.
+       */
+      createEmptySession: () => {
+        const { sessionId, session } =
+          buildSession();
+
+        set((state) => ({
+          activeView: 'search',
+          activeSessionId: sessionId,
+
+          sessions: {
+            ...state.sessions,
+            [sessionId]: session,
+          },
+
+          currentSession: null,
+        }));
+
+        return sessionId;
+      },
+
+      /**
+       * Append a message to a specific session.
+       */
+      addMessageToSession: (
+        sessionId: string,
+        message: ChatMessage,
+      ) =>
         set((state) => {
-          const newQuery = query.trim();
-          if (!newQuery) return state;
+          const session =
+            state.sessions[sessionId];
 
-          const userMsg = {
-            id: Date.now().toString(),
-            role: 'user' as const,
-            content: newQuery,
-            timestamp: new Date(),
+          if (!session) {
+            return state;
+          }
+
+          const normalizedMessage: ChatMessage = {
+            ...message,
+            id:
+              message.id ||
+              `${sessionId}-${Date.now()}-${Math.random()
+                .toString(36)
+                .substring(2, 7)}`,
+            timestamp:
+              message.timestamp || new Date(),
           };
 
-          const assistantMsg = {
-            id: (Date.now() + 1).toString(),
-            role: 'assistant' as const,
-            content: `I found some matching items in your collection for "${newQuery}".`,
-            results: [],
-            timestamp: new Date(),
+          const updatedSession: ChatSession = {
+            ...session,
+
+            messages: [
+              ...session.messages,
+              normalizedMessage,
+            ],
+
+            updatedAt: getUpdatedAt(),
           };
 
-          if (!state.currentSession) {
+          return {
+            sessions: {
+              ...state.sessions,
+              [sessionId]: updatedSession,
+            },
+
+            currentSession:
+              state.activeSessionId === sessionId
+                ? toLegacySearchSession(
+                    updatedSession,
+                  )
+                : state.currentSession,
+          };
+        }),
+
+      /**
+       * Update a session title.
+       */
+      updateSessionTitle: (
+        sessionId: string,
+        title: string,
+      ) =>
+        set((state) => {
+          const session =
+            state.sessions[sessionId];
+
+          if (!session) {
+            return state;
+          }
+
+          const updatedSession: ChatSession = {
+            ...session,
+            title:
+              title.trim() || 'New Chat',
+            updatedAt: getUpdatedAt(),
+          };
+
+          return {
+            sessions: {
+              ...state.sessions,
+              [sessionId]: updatedSession,
+            },
+
+            currentSession:
+              state.activeSessionId === sessionId
+                ? toLegacySearchSession(
+                    updatedSession,
+                  )
+                : state.currentSession,
+          };
+        }),
+
+      /**
+       * Delete a chat session.
+       */
+      deleteSession: (sessionId: string) =>
+        set((state) => {
+          const newSessions = {
+            ...state.sessions,
+          };
+
+          delete newSessions[sessionId];
+
+          if (
+            state.activeSessionId !== sessionId
+          ) {
             return {
-              currentSession: {
-                id: Date.now().toString(),
-                query: newQuery,
-                messages: [
-                  { ...userMsg, id: userMsg.id, timestamp: new Date() },
-                  { ...assistantMsg, id: (Date.now() + 1).toString(), timestamp: new Date() },
-                ],
-                createdAt: new Date(),
-              },
-              recentSearches: [newQuery, ...get().recentSearches.filter((s) => s !== newQuery)].slice(0, 8),
+              sessions: newSessions,
+            };
+          }
+
+          const remainingIds =
+            Object.keys(newSessions);
+
+          if (remainingIds.length === 0) {
+            return {
+              sessions: newSessions,
+              activeSessionId: null,
+              activeView: 'home',
+              currentSession: null,
+            };
+          }
+
+          const nextSessionId =
+            remainingIds[0];
+
+          const nextSession =
+            newSessions[nextSessionId];
+
+          return {
+            sessions: newSessions,
+            activeSessionId: nextSessionId,
+            activeView: 'search',
+            currentSession:
+              toLegacySearchSession(
+                nextSession,
+              ),
+          };
+        }),
+
+      /**
+       * Switch to an existing chat.
+       */
+      setActiveSession: (
+        sessionId: string | null,
+      ) =>
+        set((state) => {
+          if (!sessionId) {
+            return {
+              activeSessionId: null,
+              activeView: 'home',
+              currentSession: null,
+            };
+          }
+
+          const session =
+            state.sessions[sessionId];
+
+          if (!session) {
+            return {
+              activeSessionId: null,
+              activeView: 'home',
+              currentSession: null,
             };
           }
 
           return {
-            currentSession: {
-              ...state.currentSession,
-              messages: [
-                ...state.currentSession.messages,
-                { ...userMsg, id: userMsg.id, timestamp: new Date() },
-                { ...assistantMsg, id: (Date.now() + 1).toString(), timestamp: new Date() },
-              ],
-            },
-            recentSearches: [newQuery, ...get().recentSearches.filter((s) => s !== newQuery)].slice(0, 8),
+            activeSessionId: sessionId,
+            activeView: 'search',
+            currentSession:
+              toLegacySearchSession(session),
           };
         }),
 
+      /**
+       * Get the currently active canonical session.
+       */
+      getActiveSession: () => {
+        const state = get();
+
+        if (!state.activeSessionId) {
+          return null;
+        }
+
+        return (
+          state.sessions[
+            state.activeSessionId
+          ] || null
+        );
+      },
+
+      // ============================================================
+      // Legacy compatibility
+      // ============================================================
+
+      currentSession: null,
+
+      /**
+       * Compatibility bridge for older components.
+       *
+       * No Date conversion is performed because the actual
+       * SearchSession timestamp fields are strings.
+       */
+      setCurrentSession: (session) =>
+        set((state) => {
+          if (!session) {
+            return {
+              currentSession: null,
+            };
+          }
+
+          const existingSession =
+            state.sessions[session.id];
+
+          const chatSession: ChatSession =
+            existingSession || {
+              id: session.id,
+              title: session.title || 'New Chat',
+              query: session.query || '',
+              messages: session.messages || [],
+              createdAt: session.createdAt || getUpdatedAt(),
+              updatedAt: session.updatedAt || getUpdatedAt(),
+            };
+
+          return {
+            currentSession: session,
+
+            activeSessionId:
+              chatSession.id,
+
+            sessions: {
+              ...state.sessions,
+              [chatSession.id]:
+                chatSession,
+            },
+          };
+        }),
+
+      /**
+       * Legacy message method.
+       *
+       * Redirects into the canonical active session.
+       */
+      addMessage: (message: ChatMessage) => {
+        const state = get();
+
+        if (!state.activeSessionId) {
+          return;
+        }
+
+        state.addMessageToSession(
+          state.activeSessionId,
+          message,
+        );
+      },
+
+      /**
+       * Legacy user-query method.
+       */
+      addUserQuery: (query: string) => {
+        const trimmed = query.trim();
+
+        if (!trimmed) {
+          return;
+        }
+
+        const state = get();
+
+        if (!state.activeSessionId) {
+          state.startSearch(trimmed);
+          return;
+        }
+
+        const userMessage: ChatMessage = {
+          id: `${Date.now()}-${Math.random()
+            .toString(36)
+            .substring(2, 7)}`,
+          role: 'user',
+          content: trimmed,
+          timestamp: new Date(),
+        };
+
+        state.addMessageToSession(
+          state.activeSessionId,
+          userMessage,
+        );
+
+        state.addRecentSearch(trimmed);
+      },
+
+      // ============================================================
       // UI
+      // ============================================================
+
       sidebarCollapsed: false,
-      toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+
+      toggleSidebar: () =>
+        set((state) => ({
+          sidebarCollapsed:
+            !state.sidebarCollapsed,
+        })),
     }),
+
     {
       name: 'remora-store',
+
       partialize: (state) => ({
-        recentSearches: state.recentSearches,
+        recentSearches:
+          state.recentSearches,
+
         items: state.items,
-        sidebarCollapsed: state.sidebarCollapsed,
-        // Don't persist inFlightMemoryIds - they're session-specific
+
+        // Persist actual conversations.
+        sessions: state.sessions,
+        activeSessionId:
+          state.activeSessionId,
+
+        sidebarCollapsed:
+          state.sidebarCollapsed,
+
+        // Deliberately do not persist:
+        // - inFlightMemoryIds
+        // - currentSession
+        //
+        // currentSession is only a compatibility
+        // projection of sessions.
       }),
-    }
-  )
+    },
+  ),
 );

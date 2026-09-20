@@ -125,7 +125,9 @@ class TestNemotronService:
 
         answer, selected, sources, actions = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
 
-        assert answer is None
+        # On HTTP error (401), we should get a fallback response, not None
+        assert answer is not None
+        assert "couldn't complete the reasoning step" in answer.lower()
         assert selected == []
         assert sources == []
         assert actions == []
@@ -138,7 +140,8 @@ class TestNemotronService:
 
         answer, selected, sources, actions = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
 
-        assert answer is None
+        assert answer is not None
+        assert "couldn't complete the reasoning step" in answer.lower()
         assert selected == []
         assert sources == []
         assert actions == []
@@ -170,7 +173,7 @@ class TestNemotronService:
 
         # When LLM returns malformed response, agent should return fallback answer
         assert answer is not None
-        assert "couldn't find any relevant information" in answer.lower()
+        assert "couldn't complete the reasoning step" in answer.lower()
         assert selected == []
         assert sources == []
         assert actions == []
@@ -201,7 +204,7 @@ class TestNemotronService:
                 answer, selected, sources, actions = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
 
         assert answer is not None
-        assert "couldn't find any relevant information" in answer.lower()
+        assert "couldn't complete the reasoning step" in answer.lower()
         assert selected == []
         assert sources == []
         assert actions == []
@@ -232,7 +235,7 @@ class TestNemotronService:
                 answer, selected, sources, actions = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
 
         assert answer is not None
-        assert "couldn't find any relevant information" in answer.lower()
+        assert "couldn't complete the reasoning step" in answer.lower()
         assert selected == []
         assert sources == []
         assert actions == []

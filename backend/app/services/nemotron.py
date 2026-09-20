@@ -1,6 +1,7 @@
 import base64
 import json
 import time
+import asyncio
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 import httpx
@@ -13,6 +14,10 @@ logger = get_logger(__name__)
 
 NVIDIA_API_BASE = "https://integrate.api.nvidia.com/v1"
 MAX_TOOL_ITERATIONS = 5
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 1.0  # seconds
+RETRY_MAX_DELAY = 30.0  # seconds
+TRANSIENT_STATUS_CODES = {429, 502, 503, 504}
 
 
 class NemotronService:
@@ -73,6 +78,7 @@ class NemotronService:
         self,
         query: str,
         memories: List[Dict[str, Any]],
+        conversation_history: List[Dict[str, str]] = [],
     ) -> List[Dict[str, Any]]:
         """Build the message content for Nemotron with images and OCR context."""
 
@@ -121,10 +127,24 @@ class NemotronService:
                     "text": "OCR Text: (none extracted)"
                 })
 
+        # Build conversation history messages
+        history_messages = []
+        for msg in conversation_history:
+            if msg.get("role") in ("user", "assistant"):
+                history_messages.append({
+                    "role": msg["role"],
+                    "content": msg.get("content", "")
+                })
+
         messages = [
             {"role": "system", "content": self._system_prompt},
-            {"role": "user", "content": user_content}
         ]
+        
+        # Add conversation history before the current query
+        if history_messages:
+            messages.extend(history_messages)
+        
+        messages.append({"role": "user", "content": user_content})
 
         return messages
 
@@ -148,12 +168,43 @@ class NemotronService:
             "- Return valid JSON only."
         }
 
+    def _build_fallback_response(self, query: str, memories: List[Dict[str, Any]]) -> str:
+        """Build a graceful fallback response when all retries are exhausted.
+        
+        Returns a natural language response indicating the reasoning service is 
+        temporarily unavailable, while preserving candidate memories as 
+        'potentially relevant' without claiming LLM selection.
+        """
+        if not memories:
+            return "I couldn't complete the reasoning step right now, and I didn't find any memories for your query."
+
+        # Build list of candidate memories
+        memory_descriptions = []
+        for i, memory in enumerate(memories[:10]):  # Limit to top 10
+            filename = memory.get("original_filename", "unknown")
+            memory_id = memory.get("memory_id", "unknown")
+            ocr_text = memory.get("ocr_text", "")
+            desc = f"{i+1}. {filename}"
+            if ocr_text:
+                desc += f" (OCR: {ocr_text[:100]}{'...' if len(ocr_text) > 100 else ''})"
+            memory_descriptions.append(desc)
+
+        memory_list = "\n".join(memory_descriptions)
+        
+        return (
+            f"I couldn't complete the reasoning step right now, but I found these "
+            f"potentially relevant memories in your collection:\n\n{memory_list}\n\n"
+            f"These are candidate memories that matched your query, but I couldn't "
+            f"complete the reasoning step to confirm which are actually relevant. "
+            f"Please try again later for a more precise answer."
+        )
+
     async def _call_llm(
         self,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Call the LLM API and return the message."""
+        """Call the LLM API and return the message with retry logic for transient failures."""
         payload = {
             "model": self.settings.NEMOTRON_MODEL,
             "messages": messages,
@@ -165,23 +216,104 @@ class NemotronService:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
-        response = await self.client.post("/chat/completions", json=payload)
-        response.raise_for_status()
+        retry_count = 0
+        last_error = None
 
-        data = response.json()
+        while retry_count <= MAX_RETRIES:
+            delay = None  # Initialize delay for each iteration
+            try:
+                response = await self.client.post("/chat/completions", json=payload)
+                response.raise_for_status()
 
-        choices = data.get("choices", [])
-        if not choices:
-            logger.error("nemotron_no_choices_returned", model=self.settings.NEMOTRON_MODEL)
-            return None
+                data = response.json()
 
-        message = choices[0].get("message", {})
-        return message
+                choices = data.get("choices", [])
+                if not choices:
+                    logger.error("nemotron_no_choices_returned", model=self.settings.NEMOTRON_MODEL)
+                    return None
+
+                message = choices[0].get("message", {})
+                return message
+
+            except httpx.TimeoutException as e:
+                last_error = e
+                logger.warning(f"Nemotron timeout (attempt {retry_count + 1}/{MAX_RETRIES + 1})", model=self.settings.NEMOTRON_MODEL)
+                if retry_count >= MAX_RETRIES:
+                    break
+
+            except httpx.HTTPStatusError as e:
+                status_code = e.response.status_code
+                last_error = e
+
+                # Check if error is transient and should be retried
+                if status_code in TRANSIENT_STATUS_CODES:
+                    logger.warning(
+                        f"Nemotron transient error (attempt {retry_count + 1}/{MAX_RETRIES + 1})",
+                        status_code=status_code,
+                        model=self.settings.NEMOTRON_MODEL,
+                    )
+
+                    # Check for Retry-After header
+                    retry_after = e.response.headers.get("Retry-After")
+                    if retry_after:
+                        try:
+                            delay = float(retry_after)
+                            delay = min(delay, RETRY_MAX_DELAY)
+                            logger.info(f"Honoring Retry-After header: {delay}s")
+                        except ValueError:
+                            delay = None
+                    else:
+                        delay = None
+
+                    if retry_count >= MAX_RETRIES:
+                        break
+                else:
+                    # Non-transient error - don't retry
+                    if status_code == 429:
+                        logger.error("nemotron_rate_limited", model=self.settings.NEMOTRON_MODEL)
+                    elif status_code >= 500:
+                        logger.error(
+                            "nemotron_server_error",
+                            model=self.settings.NEMOTRON_MODEL,
+                            status_code=status_code,
+                        )
+                    else:
+                        logger.error(
+                            "nemotron_http_error",
+                            model=self.settings.NEMOTRON_MODEL,
+                            status_code=status_code,
+                            response=e.response.text[:500],
+                        )
+                    break
+
+            except Exception as e:
+                last_error = e
+                logger.error("nemotron_reasoning_failed", error=str(e))
+                break
+
+            # Calculate delay with exponential backoff
+            if retry_count < MAX_RETRIES:
+                if delay is not None:
+                    await asyncio.sleep(delay)
+                else:
+                    delay = min(RETRY_BASE_DELAY * (2 ** retry_count), RETRY_MAX_DELAY)
+                    await asyncio.sleep(delay)
+                retry_count += 1
+
+        # All retries exhausted
+        logger.error(
+            "nemotron_all_retries_failed",
+            model=self.settings.NEMOTRON_MODEL,
+            attempts=retry_count,
+            last_error=str(last_error) if last_error else "unknown",
+        )
+        return None
 
     async def reason(
         self,
         query: str,
         memories: List[Dict[str, Any]],
+        conversation_history: List[Dict[str, str]] = [],
     ) -> Tuple[Optional[str], List[str], List[Dict[str, Any]], List[Dict[str, Any]]]:
         """Perform multimodal reasoning with Nemotron using tool-calling agent loop.
 
@@ -213,8 +345,8 @@ class NemotronService:
                     "image_b64": image_b64,
                 })
 
-            # Build initial messages
-            messages = self._build_reasoning_prompt(query, enriched_memories)
+            # Build initial messages with conversation history
+            messages = self._build_reasoning_prompt(query, enriched_memories, conversation_history)
             tools = tool_registry.get_tool_definitions()
 
             # Tool-calling agent loop
@@ -229,7 +361,8 @@ class NemotronService:
 
                 message = await self._call_llm(messages, tools)
                 if message is None:
-                    break
+                    # All retries exhausted - return graceful fallback
+                    return self._build_fallback_response(query, memories), [], [], []
 
                 # Check if LLM wants to call a tool
                 tool_calls = message.get("tool_calls", [])
@@ -237,6 +370,10 @@ class NemotronService:
                 if not tool_calls:
                     # No tool calls - this should be the final response
                     content = message.get("content", "")
+                    if not content or not content.strip():
+                        logger.warning("nemotron_empty_content", message=message)
+                        # Treat empty content as a failure to trigger retry/fallback
+                        break
                     try:
                         parsed = json.loads(content)
                         final_answer = parsed.get("answer", "").strip()
@@ -261,7 +398,7 @@ class NemotronService:
                         break
                     except json.JSONDecodeError:
                         logger.warning("nemotron_non_json_response", content=content[:500])
-                        # Not a valid JSON, continue loop
+                        # Not a valid JSON, continue loop to retry/fallback
                         pass
 
                 # Execute tool calls
@@ -311,19 +448,10 @@ class NemotronService:
 
             # If we exited loop without final answer, try to get one
             if final_answer is None:
-                # Request final response
-                messages.append(self._build_final_response_prompt())
-                message = await self._call_llm(messages, None)
-                if message:
-                    content = message.get("content", "")
-                    try:
-                        parsed = json.loads(content)
-                        final_answer = parsed.get("answer", "").strip()
-                        selected_memory_ids = parsed.get("selected_memory_ids", [])
-                        sources = parsed.get("sources", [])
-                        actions = parsed.get("actions", [])
-                    except json.JSONDecodeError:
-                        final_answer = content.strip()
+                # Check if we should return fallback instead of retrying
+                # Check if we had a valid message that just had empty/invalid content
+                # If we exhausted retries in _call_llm, return fallback
+                return self._build_fallback_response(query, memories), [], [], []
 
             # Validate final answer
             if not final_answer:

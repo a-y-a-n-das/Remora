@@ -473,3 +473,449 @@ def test_search_memories_neon_missing_memory(client, mock_db_session, mock_setti
             data = response.json()
             assert len(data["results"]) == 1
             assert data["results"][0]["memory_id"] == "mem_1"
+
+
+def test_query_endpoint_with_conversation_history(client, mock_db_session):
+    """Test /memories/query endpoint with conversation_history - validates FastAPI deserialization."""
+    with patch("app.api.memories.voyage_embedding_service.get_text_embedding", new_callable=AsyncMock) as mock_voyage:
+        mock_voyage.return_value = [0.1] * 1024
+
+        with patch("app.api.memories.s3_vectors_service.query_vectors", new_callable=AsyncMock) as mock_s3v:
+            mock_s3v.return_value = [
+                {"memory_id": "mem_1", "distance": 0.1},
+            ]
+
+            mock_memory = MagicMock(spec=Memory)
+            mock_memory.id = "mem_1"
+            mock_memory.ocr_text = "AWS Invoice"
+            mock_memory.s3_key = "memories/mem_1/original.jpg"
+            mock_memory.original_filename = "invoice.jpg"
+            mock_memory.created_at = "2024-01-15T10:30:00Z"
+
+            mock_result = MagicMock()
+            mock_result.scalars.return_value.all.return_value = [mock_memory]
+            mock_db_session.execute = AsyncMock(return_value=mock_result)
+
+            # Mock nemotron_service.reason to return a valid response
+            with patch("app.api.memories.nemotron_service.reason", new_callable=AsyncMock) as mock_reason:
+                mock_reason.return_value = ("Test answer", ["mem_1"], [], [])
+
+                # Test with conversation_history
+                response = client.post("/memories/query", json={
+                    "query": "test query",
+                    "limit": 5,
+                    "conversation_history": [
+                        {"role": "user", "content": "previous query"},
+                        {"role": "assistant", "content": "previous answer"}
+                    ]
+                })
+
+                assert response.status_code == 200
+                data = response.json()
+                assert data["query"] == "test query"
+                assert data["answer"] == "Test answer"
+
+                # Verify nemotron_service.reason was called with conversation_history
+                mock_reason.assert_awaited_once()
+                call_args = mock_reason.call_args
+                assert call_args[0][2] == [{"role": "user", "content": "previous query"}, {"role": "assistant", "content": "previous answer"}]
+
+
+def test_query_endpoint_empty_conversation_history(client, mock_db_session):
+    """Test /memories/query endpoint with empty conversation_history."""
+    with patch("app.api.memories.voyage_embedding_service.get_text_embedding", new_callable=AsyncMock) as mock_voyage:
+        mock_voyage.return_value = [0.1] * 1024
+
+        with patch("app.api.memories.s3_vectors_service.query_vectors", new_callable=AsyncMock) as mock_s3v:
+            mock_s3v.return_value = [
+                {"memory_id": "mem_1", "distance": 0.1},
+            ]
+
+            mock_memory = MagicMock(spec=Memory)
+            mock_memory.id = "mem_1"
+            mock_memory.ocr_text = "AWS Invoice"
+            mock_memory.s3_key = "memories/mem_1/original.jpg"
+            mock_memory.original_filename = "invoice.jpg"
+            mock_memory.created_at = "2024-01-15T10:30:00Z"
+
+            mock_result = MagicMock()
+            mock_result.scalars.return_value.all.return_value = [mock_memory]
+            mock_db_session.execute = AsyncMock(return_value=mock_result)
+
+            with patch("app.api.memories.nemotron_service.reason", new_callable=AsyncMock) as mock_reason:
+                mock_reason.return_value = ("Test answer", ["mem_1"], [], [])
+
+                # Test with empty conversation_history
+                response = client.post("/memories/query", json={
+                    "query": "test query",
+                    "limit": 5,
+                    "conversation_history": []
+                })
+
+                assert response.status_code == 200
+                data = response.json()
+                assert data["query"] == "test query"
+                assert data["answer"] == "Test answer"
+
+
+def test_query_endpoint_without_conversation_history(client, mock_db_session):
+    """Test /memories/query endpoint without conversation_history field (backward compatibility)."""
+    with patch("app.api.memories.voyage_embedding_service.get_text_embedding", new_callable=AsyncMock) as mock_voyage:
+        mock_voyage.return_value = [0.1] * 1024
+
+        with patch("app.api.memories.s3_vectors_service.query_vectors", new_callable=AsyncMock) as mock_s3v:
+            mock_s3v.return_value = [
+                {"memory_id": "mem_1", "distance": 0.1},
+            ]
+
+            mock_memory = MagicMock(spec=Memory)
+            mock_memory.id = "mem_1"
+            mock_memory.ocr_text = "AWS Invoice"
+            mock_memory.s3_key = "memories/mem_1/original.jpg"
+            mock_memory.original_filename = "invoice.jpg"
+            mock_memory.created_at = "2024-01-15T10:30:00Z"
+
+            mock_result = MagicMock()
+            mock_result.scalars.return_value.all.return_value = [mock_memory]
+            mock_db_session.execute = AsyncMock(return_value=mock_result)
+
+            with patch("app.api.memories.nemotron_service.reason", new_callable=AsyncMock) as mock_reason:
+                mock_reason.return_value = ("Test answer", ["mem_1"], [], [])
+
+                # Test without conversation_history field (backward compatibility)
+                response = client.post("/memories/query", json={
+                    "query": "test query",
+                    "limit": 5
+                })
+
+                assert response.status_code == 200
+                data = response.json()
+                assert data["query"] == "test query"
+                assert data["answer"] == "Test answer"
+
+
+def test_query_endpoint_selected_memories_field(client, mock_db_session):
+    """Test that selected_memories field is populated with only selected memories."""
+    with patch("app.api.memories.voyage_embedding_service.get_text_embedding", new_callable=AsyncMock) as mock_voyage:
+        mock_voyage.return_value = [0.1] * 1024
+
+        with patch("app.api.memories.s3_vectors_service.query_vectors", new_callable=AsyncMock) as mock_s3v:
+            # Return 3 candidate memories
+            mock_s3v.return_value = [
+                {"memory_id": "mem_A", "distance": 0.1},
+                {"memory_id": "mem_B", "distance": 0.2},
+                {"memory_id": "mem_C", "distance": 0.3},
+            ]
+
+            mock_memory_a = MagicMock(spec=Memory)
+            mock_memory_a.id = "mem_A"
+            mock_memory_a.ocr_text = "AWS Invoice"
+            mock_memory_a.s3_key = "memories/mem_A/original.jpg"
+            mock_memory_a.original_filename = "invoice.jpg"
+            mock_memory_a.created_at = "2024-01-15T10:30:00Z"
+
+            mock_memory_b = MagicMock(spec=Memory)
+            mock_memory_b.id = "mem_B"
+            mock_memory_b.ocr_text = "Random Receipt"
+            mock_memory_b.s3_key = "memories/mem_B/original.png"
+            mock_memory_b.original_filename = "receipt.png"
+            mock_memory_b.created_at = "2024-01-14T10:30:00Z"
+
+            mock_memory_c = MagicMock(spec=Memory)
+            mock_memory_c.id = "mem_C"
+            mock_memory_c.ocr_text = "Meeting Notes"
+            mock_memory_c.s3_key = "memories/mem_C/original.pdf"
+            mock_memory_c.original_filename = "notes.pdf"
+            mock_memory_c.created_at = "2024-01-13T10:30:00Z"
+
+            mock_result = MagicMock()
+            mock_result.scalars.return_value.all.return_value = [mock_memory_a, mock_memory_b, mock_memory_c]
+            mock_db_session.execute = AsyncMock(return_value=mock_result)
+
+            with patch("app.api.memories.nemotron_service.reason", new_callable=AsyncMock) as mock_reason:
+                # Nemotron selects only mem_A
+                mock_reason.return_value = ("Found your AWS invoice", ["mem_A"], [], [])
+
+                response = client.post("/memories/query", json={
+                    "query": "AWS invoice",
+                    "limit": 5
+                })
+
+                assert response.status_code == 200
+                data = response.json()
+                assert data["query"] == "AWS invoice"
+                assert data["answer"] == "Found your AWS invoice"
+                
+                # Verify selected_memory_ids contains only mem_A
+                assert data["selected_memory_ids"] == ["mem_A"]
+                
+                # Verify selected_memories contains only mem_A (not mem_B or mem_C)
+                assert "selected_memories" in data
+                assert len(data["selected_memories"]) == 1
+                assert data["selected_memories"][0]["memory_id"] == "mem_A"
+                assert data["selected_memories"][0]["original_filename"] == "invoice.jpg"
+                
+                # Verify unrelated candidates are not included
+                selected_ids = [m["memory_id"] for m in data["selected_memories"]]
+                assert "mem_B" not in selected_ids
+                assert "mem_C" not in selected_ids
+
+
+def test_query_endpoint_multiple_selected_memories(client, mock_db_session):
+    """Test that multiple selected memories are all included in selected_memories."""
+    with patch("app.api.memories.voyage_embedding_service.get_text_embedding", new_callable=AsyncMock) as mock_voyage:
+        mock_voyage.return_value = [0.1] * 1024
+
+        with patch("app.api.memories.s3_vectors_service.query_vectors", new_callable=AsyncMock) as mock_s3v:
+            mock_s3v.return_value = [
+                {"memory_id": "mem_A", "distance": 0.1},
+                {"memory_id": "mem_B", "distance": 0.2},
+                {"memory_id": "mem_C", "distance": 0.3},
+            ]
+
+            mock_memory_a = MagicMock(spec=Memory)
+            mock_memory_a.id = "mem_A"
+            mock_memory_a.ocr_text = "AWS Invoice 1"
+            mock_memory_a.s3_key = "memories/mem_A/original.jpg"
+            mock_memory_a.original_filename = "invoice1.jpg"
+            mock_memory_a.created_at = "2024-01-15T10:30:00Z"
+
+            mock_memory_b = MagicMock(spec=Memory)
+            mock_memory_b.id = "mem_B"
+            mock_memory_b.ocr_text = "AWS Invoice 2"
+            mock_memory_b.s3_key = "memories/mem_B/original.png"
+            mock_memory_b.original_filename = "invoice2.png"
+            mock_memory_b.created_at = "2024-01-14T10:30:00Z"
+
+            mock_memory_c = MagicMock(spec=Memory)
+            mock_memory_c.id = "mem_C"
+            mock_memory_c.ocr_text = "Random Receipt"
+            mock_memory_c.s3_key = "memories/mem_C/original.pdf"
+            mock_memory_c.original_filename = "receipt.pdf"
+            mock_memory_c.created_at = "2024-01-13T10:30:00Z"
+
+            mock_result = MagicMock()
+            mock_result.scalars.return_value.all.return_value = [mock_memory_a, mock_memory_b, mock_memory_c]
+            mock_db_session.execute = AsyncMock(return_value=mock_result)
+
+            with patch("app.api.memories.nemotron_service.reason", new_callable=AsyncMock) as mock_reason:
+                # Nemotron selects mem_A and mem_B
+                mock_reason.return_value = ("Found your AWS invoices", ["mem_A", "mem_B"], [], [])
+
+                response = client.post("/memories/query", json={
+                    "query": "AWS invoices",
+                    "limit": 5
+                })
+
+                assert response.status_code == 200
+                data = response.json()
+                
+                # Verify selected_memory_ids contains both
+                assert data["selected_memory_ids"] == ["mem_A", "mem_B"]
+                
+                # Verify selected_memories contains both
+                assert len(data["selected_memories"]) == 2
+                selected_ids = [m["memory_id"] for m in data["selected_memories"]]
+                assert "mem_A" in selected_ids
+                assert "mem_B" in selected_ids
+                assert "mem_C" not in selected_ids
+
+
+def test_query_endpoint_fallback_no_selected_memories(client, mock_db_session):
+    """Test that fallback response has empty selected_memories."""
+    with patch("app.api.memories.voyage_embedding_service.get_text_embedding", new_callable=AsyncMock) as mock_voyage:
+        mock_voyage.return_value = [0.1] * 1024
+
+        with patch("app.api.memories.s3_vectors_service.query_vectors", new_callable=AsyncMock) as mock_s3v:
+            mock_s3v.return_value = [
+                {"memory_id": "mem_A", "distance": 0.1},
+            ]
+
+            mock_memory_a = MagicMock(spec=Memory)
+            mock_memory_a.id = "mem_A"
+            mock_memory_a.ocr_text = "Some document"
+            mock_memory_a.s3_key = "memories/mem_A/original.jpg"
+            mock_memory_a.original_filename = "doc.jpg"
+            mock_memory_a.created_at = "2024-01-15T10:30:00Z"
+
+            mock_result = MagicMock()
+            mock_result.scalars.return_value.all.return_value = [mock_memory_a]
+            mock_db_session.execute = AsyncMock(return_value=mock_result)
+
+            with patch("app.api.memories.nemotron_service.reason", new_callable=AsyncMock) as mock_reason:
+                # Fallback: answer present but no selected memories
+                mock_reason.return_value = ("I couldn't complete reasoning but found candidates", [], [], [])
+
+                response = client.post("/memories/query", json={
+                    "query": "test query",
+                    "limit": 5
+                })
+
+                assert response.status_code == 200
+                data = response.json()
+                assert data["is_fallback"] is True
+                assert data["selected_memory_ids"] == []
+                assert data["selected_memories"] == []
+
+
+def test_query_endpoint_conversation_history_empty(client, mock_db_session):
+    """Test first query sends empty conversation_history."""
+    with patch("app.api.memories.voyage_embedding_service.get_text_embedding", new_callable=AsyncMock) as mock_voyage:
+        mock_voyage.return_value = [0.1] * 1024
+
+        with patch("app.api.memories.s3_vectors_service.query_vectors", new_callable=AsyncMock) as mock_s3v:
+            mock_s3v.return_value = [{"memory_id": "mem_1", "distance": 0.1}]
+
+            mock_memory = MagicMock(spec=Memory)
+            mock_memory.id = "mem_1"
+            mock_memory.ocr_text = "Test"
+            mock_memory.s3_key = "memories/mem_1/original.jpg"
+            mock_memory.original_filename = "test.jpg"
+            mock_memory.created_at = "2024-01-15T10:30:00Z"
+
+            mock_result = MagicMock()
+            mock_result.scalars.return_value.all.return_value = [mock_memory]
+            mock_db_session.execute = AsyncMock(return_value=mock_result)
+
+            with patch("app.api.memories.nemotron_service.reason", new_callable=AsyncMock) as mock_reason:
+                mock_reason.return_value = ("Test answer", ["mem_1"], [], [])
+
+                response = client.post("/memories/query", json={
+                    "query": "first query",
+                    "limit": 5,
+                    "conversation_history": []
+                })
+
+                assert response.status_code == 200
+                mock_reason.assert_awaited_once()
+                call_args = mock_reason.call_args
+                assert call_args[0][2] == []
+
+
+def test_query_endpoint_conversation_history_second_query(client, mock_db_session):
+    """Test second query sends first user + assistant messages."""
+    with patch("app.api.memories.voyage_embedding_service.get_text_embedding", new_callable=AsyncMock) as mock_voyage:
+        mock_voyage.return_value = [0.1] * 1024
+
+        with patch("app.api.memories.s3_vectors_service.query_vectors", new_callable=AsyncMock) as mock_s3v:
+            mock_s3v.return_value = [{"memory_id": "mem_1", "distance": 0.1}]
+
+            mock_memory = MagicMock(spec=Memory)
+            mock_memory.id = "mem_1"
+            mock_memory.ocr_text = "Test"
+            mock_memory.s3_key = "memories/mem_1/original.jpg"
+            mock_memory.original_filename = "test.jpg"
+            mock_memory.created_at = "2024-01-15T10:30:00Z"
+
+            mock_result = MagicMock()
+            mock_result.scalars.return_value.all.return_value = [mock_memory]
+            mock_db_session.execute = AsyncMock(return_value=mock_result)
+
+            with patch("app.api.memories.nemotron_service.reason", new_callable=AsyncMock) as mock_reason:
+                mock_reason.return_value = ("Test answer", ["mem_1"], [], [])
+
+                response = client.post("/memories/query", json={
+                    "query": "second query",
+                    "limit": 5,
+                    "conversation_history": [
+                        {"role": "user", "content": "first query"},
+                        {"role": "assistant", "content": "first answer"}
+                    ]
+                })
+
+                assert response.status_code == 200
+                mock_reason.assert_awaited_once()
+                call_args = mock_reason.call_args
+                assert call_args[0][2] == [
+                    {"role": "user", "content": "first query"},
+                    {"role": "assistant", "content": "first answer"}
+                ]
+
+
+def test_query_endpoint_conversation_history_third_query(client, mock_db_session):
+    """Test third query sends all preceding messages but not current query."""
+    with patch("app.api.memories.voyage_embedding_service.get_text_embedding", new_callable=AsyncMock) as mock_voyage:
+        mock_voyage.return_value = [0.1] * 1024
+
+        with patch("app.api.memories.s3_vectors_service.query_vectors", new_callable=AsyncMock) as mock_s3v:
+            mock_s3v.return_value = [{"memory_id": "mem_1", "distance": 0.1}]
+
+            mock_memory = MagicMock(spec=Memory)
+            mock_memory.id = "mem_1"
+            mock_memory.ocr_text = "AWS Invoice"
+            mock_memory.s3_key = "memories/mem_1/original.jpg"
+            mock_memory.original_filename = "invoice.jpg"
+            mock_memory.created_at = "2024-01-15T10:30:00Z"
+
+            mock_result = MagicMock()
+            mock_result.scalars.return_value.all.return_value = [mock_memory]
+            mock_db_session.execute = AsyncMock(return_value=mock_result)
+
+            with patch("app.api.memories.nemotron_service.reason", new_callable=AsyncMock) as mock_reason:
+                mock_reason.return_value = ("Test answer", ["mem_1"], [], [])
+
+                response = client.post("/memories/query", json={
+                    "query": "can you get me the link",
+                    "limit": 5,
+                    "conversation_history": [
+                        {"role": "user", "content": "Find the AWS bill"},
+                        {"role": "assistant", "content": "Found your AWS invoice"},
+                        {"role": "user", "content": "where can I pay it"},
+                        {"role": "assistant", "content": "You can pay at the AWS console"}
+                    ]
+                })
+
+                assert response.status_code == 200
+                mock_reason.assert_awaited_once()
+                call_args = mock_reason.call_args
+                history = call_args[0][2]
+                assert len(history) == 4
+                assert history[0] == {"role": "user", "content": "Find the AWS bill"}
+                assert history[1] == {"role": "assistant", "content": "Found your AWS invoice"}
+                assert history[2] == {"role": "user", "content": "where can I pay it"}
+                assert history[3] == {"role": "assistant", "content": "You can pay at the AWS console"}
+                # Current query should NOT be in conversation_history
+                assert not any(msg.get("content") == "can you get me the link" for msg in history)
+
+
+def test_query_endpoint_conversation_history_session_isolation(client, mock_db_session):
+    """Test that conversation history is only from current session."""
+    with patch("app.api.memories.voyage_embedding_service.get_text_embedding", new_callable=AsyncMock) as mock_voyage:
+        mock_voyage.return_value = [0.1] * 1024
+
+        with patch("app.api.memories.s3_vectors_service.query_vectors", new_callable=AsyncMock) as mock_s3v:
+            mock_s3v.return_value = [{"memory_id": "mem_1", "distance": 0.1}]
+
+            mock_memory = MagicMock(spec=Memory)
+            mock_memory.id = "mem_1"
+            mock_memory.ocr_text = "Test"
+            mock_memory.s3_key = "memories/mem_1/original.jpg"
+            mock_memory.original_filename = "test.jpg"
+            mock_memory.created_at = "2024-01-15T10:30:00Z"
+
+            mock_result = MagicMock()
+            mock_result.scalars.return_value.all.return_value = [mock_memory]
+            mock_db_session.execute = AsyncMock(return_value=mock_result)
+
+            with patch("app.api.memories.nemotron_service.reason", new_callable=AsyncMock) as mock_reason:
+                mock_reason.return_value = ("Test answer", ["mem_1"], [], [])
+
+                # Simulate a request with history from a different session
+                response = client.post("/memories/query", json={
+                    "query": "new query",
+                    "limit": 5,
+                    "conversation_history": [
+                        {"role": "user", "content": "previous session query"},
+                        {"role": "assistant", "content": "previous session answer"}
+                    ]
+                })
+
+                assert response.status_code == 200
+                mock_reason.assert_awaited_once()
+                call_args = mock_reason.call_args
+                history = call_args[0][2]
+                # Should only contain what was sent in this request
+                assert history == [
+                    {"role": "user", "content": "previous session query"},
+                    {"role": "assistant", "content": "previous session answer"}
+                ]

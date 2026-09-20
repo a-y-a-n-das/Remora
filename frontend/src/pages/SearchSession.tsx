@@ -256,8 +256,26 @@ export function SearchSession({
     setLoading(true);
     setError(null);
     try {
+      // Build conversation history from current session messages
+      // Exclude the current query if it's the last user message (since it's sent as `query` field)
+      const messages = currentSession?.messages ?? [];
+      const conversation_history = messages
+        .filter((msg) => !(msg.role === 'user' && msg.content === query && msg === messages[messages.length - 1]))
+        .map((msg) => ({
+          role: msg.role,
+          content: msg.content,
+        }));
+
       let response: {
         answer?: string;
+        selected_memories?: Array<{
+          memory_id: string;
+          original_filename?: string | null;
+          mime_type?: string | null;
+          s3_key?: string | null;
+          size_bytes?: number | null;
+          uploaded_at?: string | null;
+        }>;
         sources?: Array<{
           memory_id: string;
           original_filename?: string | null;
@@ -268,17 +286,17 @@ export function SearchSession({
         }>;
       };
       try {
-        response = await memoriesApi.query(query);
+        response = await memoriesApi.query(query, 5, conversation_history);
       } catch (queryError) {
         console.warn(`Reasoning query failed for "${query}", falling back to vector search`, queryError);
         const searchResponse = await memoriesApi.search(query);
         response = {
           answer: `I found ${searchResponse.results.length} matching memories.`,
-          sources: searchResponse.results,
+          selected_memories: searchResponse.results,
         };
       }
       const results = await Promise.all(
-        (response.sources ?? []).map((source: {
+        (response.selected_memories ?? []).map((source: {
           memory_id: string;
           original_filename?: string | null;
           mime_type?: string | null;

@@ -65,6 +65,11 @@ async def exa_web_search(query: str, num_results: int = 5) -> Dict[str, Any]:
         logger.warning("EXA_API_KEY not configured")
         return {"results": [], "error": "Exa API not configured"}
 
+    # Ensure query is a string (defensive: LLM might pass object)
+    if not isinstance(query, str):
+        logger.warning(f"exa_web_search received non-string query: {type(query)}, converting to string")
+        query = str(query)
+
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
@@ -108,6 +113,11 @@ async def exa_web_fetch(url: str) -> Dict[str, Any]:
     if not exa_api_key:
         logger.warning("EXA_API_KEY not configured")
         return {"content": "", "error": "Exa API not configured"}
+
+    # Ensure url is a string (defensive: LLM might pass object)
+    if not isinstance(url, str):
+        logger.warning(f"exa_web_fetch received non-string url: {type(url)}, converting to string")
+        url = str(url)
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:

@@ -19,11 +19,22 @@ export interface ChatMessage {
   timestamp: Date;
 }
 
-export interface SearchSession {
+export interface ChatSession {
   id: string;
+  title: string;
   query: string;
   messages: ChatMessage[];
-  createdAt: Date;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SearchSession {
+  id: string;
+  title: string;
+  query: string;
+  messages: ChatMessage[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface SearchResult {

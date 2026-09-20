@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, HttpUrl
-from typing import Optional, List, Literal
+from typing import Optional, List, Literal, Dict
 from datetime import datetime
 
 
@@ -85,6 +85,7 @@ class ChatResponse(BaseModel):
 class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=1000)
     limit: int = Field(default=5, ge=1, le=10)
+    conversation_history: List[Dict[str, str]] = []
 
 
 class QueryResult(BaseModel):
@@ -113,5 +114,7 @@ class QueryResponse(BaseModel):
     query: str
     answer: str
     selected_memory_ids: List[str] = []
+    selected_memories: List[QueryResult] = []
     sources: List[Source] = []
     actions: List[Action] = []
+    is_fallback: bool = False

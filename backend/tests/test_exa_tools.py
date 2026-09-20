@@ -169,6 +169,8 @@ class TestExaTools:
 
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
 
             with patch("app.services.tools.httpx.AsyncClient", return_value=mock_client):
                 result = await exa_web_fetch("https://example.com")
@@ -359,3 +361,171 @@ class TestToolRegistration:
         assert "title" in calendar_tool["function"]["parameters"]["required"]
         assert "start_datetime" in calendar_tool["function"]["parameters"]["required"]
         assert "end_datetime" in calendar_tool["function"]["parameters"]["required"]
+
+
+class TestExaPayloadValidation:
+    """Tests for Exa API payload validation."""
+
+    @pytest.fixture(autouse=True)
+    def clear_registry(self):
+        """Clear the tool registry before each test."""
+        tool_registry._tools.clear()
+        yield
+        tool_registry._tools.clear()
+
+    @pytest.fixture
+    def mock_settings(self):
+        """Mock settings with EXA_API_KEY."""
+        settings = MagicMock()
+        settings.EXA_API_KEY = "test-exa-api-key"
+        settings.EXA_API_BASE = "https://api.exa.ai"
+        return settings
+
+    @pytest.mark.asyncio
+    async def test_exa_web_search_payload_format(self, mock_settings):
+        """Test that exa_web_search sends correct JSON payload to Exa API."""
+        with patch("app.services.tools.get_settings", return_value=mock_settings):
+            mock_response = MagicMock()
+            mock_response.json.return_value = {
+                "results": [
+                    {"title": "Test Result", "url": "https://example.com", "text": "Test content"}
+                ]
+            }
+            mock_response.raise_for_status = MagicMock()
+
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+
+            with patch("app.services.tools.httpx.AsyncClient", return_value=mock_client):
+                result = await exa_web_search("test query", num_results=5)
+
+            # Verify the exact JSON payload sent to Exa API
+            mock_client.post.assert_awaited_once()
+            call_args = mock_client.post.call_args
+            payload = call_args[1]["json"]
+            
+            # Verify exact payload structure
+            assert payload["query"] == "test query"
+            assert payload["numResults"] == 5
+            assert payload["useAutoprompt"] is True
+            assert payload["type"] == "keyword"
+            assert set(payload.keys()) == {"query", "numResults", "useAutoprompt", "type"}
+            
+            # Verify query is a string (not object)
+            assert isinstance(payload["query"], str)
+            assert isinstance(payload["numResults"], int)
+            assert isinstance(payload["useAutoprompt"], bool)
+            assert isinstance(payload["type"], str)
+
+    @pytest.mark.asyncio
+    async def test_exa_web_search_query_is_string_not_object(self, mock_settings):
+        """Test that query parameter is always a string, not an object."""
+        with patch("app.services.tools.get_settings", return_value=mock_settings):
+            mock_response = MagicMock()
+            mock_response.json.return_value = {"results": []}
+            mock_response.raise_for_status = MagicMock()
+
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+
+            with patch("app.services.tools.httpx.AsyncClient", return_value=mock_client):
+                # Pass query as non-string to test defensive conversion
+                result = await exa_web_search({"unexpected": "object"}, num_results=5)
+
+            call_args = mock_client.post.call_args
+            payload = call_args[1]["json"]
+            
+            # Should have converted to string
+            assert isinstance(payload["query"], str)
+            assert payload["query"] == "{'unexpected': 'object'}"
+
+    @pytest.mark.asyncio
+    async def test_exa_web_fetch_payload_format(self, mock_settings):
+        """Test that exa_web_fetch sends correct JSON payload to Exa API."""
+        with patch("app.services.tools.get_settings", return_value=mock_settings):
+            mock_response = MagicMock()
+            mock_response.json.return_value = {
+                "results": [{"text": "Page content", "highlights": ["highlight"]}]
+            }
+            mock_response.raise_for_status = MagicMock()
+
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+
+            with patch("app.services.tools.httpx.AsyncClient", return_value=mock_client):
+                result = await exa_web_fetch("https://example.com")
+
+            mock_client.post.assert_awaited_once()
+            call_args = mock_client.post.call_args
+            payload = call_args[1]["json"]
+            
+            # Verify exact payload structure for contents endpoint
+            assert payload["ids"] == ["https://example.com"]
+            assert payload["text"] is True
+            assert payload["highlights"] is True
+            assert set(payload.keys()) == {"ids", "text", "highlights"}
+            
+            # Verify URL is in array
+            assert isinstance(payload["ids"], list)
+            assert len(payload["ids"]) == 1
+            assert isinstance(payload["ids"][0], str)
+
+    @pytest.mark.asyncio
+    async def test_exa_web_fetch_url_is_string_not_object(self, mock_settings):
+        """Test that url parameter is always a string, not an object."""
+        with patch("app.services.tools.get_settings", return_value=mock_settings):
+            mock_response = MagicMock()
+            mock_response.json.return_value = {"results": []}
+            mock_response.raise_for_status = MagicMock()
+
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+
+            with patch("app.services.tools.httpx.AsyncClient", return_value=mock_client):
+                # Pass URL as non-string to test defensive conversion
+                result = await exa_web_fetch({"unexpected": "object"})
+
+            call_args = mock_client.post.call_args
+            payload = call_args[1]["json"]
+            
+            # Should have converted to string
+            assert isinstance(payload["ids"], list)
+            assert len(payload["ids"]) == 1
+            assert isinstance(payload["ids"][0], str)
+            assert payload["ids"][0] == "{'unexpected': 'object'}"
+
+    @pytest.mark.asyncio
+    async def test_exa_web_search_payload_has_correct_field_names(self, mock_settings):
+        """Test that Exa search payload uses correct field names per API spec."""
+        with patch("app.services.tools.get_settings", return_value=mock_settings):
+            mock_response = MagicMock()
+            mock_response.json.return_value = {"results": []}
+            mock_response.raise_for_status = MagicMock()
+
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+
+            with patch("app.services.tools.httpx.AsyncClient", return_value=mock_client):
+                await exa_web_search("test", num_results=3)
+
+            call_args = mock_client.post.call_args
+            payload = call_args[1]["json"]
+            
+            # Verify field names match Exa API specification
+            assert "query" in payload
+            assert "numResults" in payload  # camelCase per Exa API
+            assert "useAutoprompt" in payload
+            assert "type" in payload
+            
+            # No extra fields
+            assert set(payload.keys()) == {"query", "numResults", "useAutoprompt", "type"}

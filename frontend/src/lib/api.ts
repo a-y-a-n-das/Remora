@@ -53,8 +53,8 @@ export const memoriesApi = {
     return response.data;
   },
 
-  query: async (query: string, limit = 5) => {
-    const response = await api.post('/memories/query', { query, limit });
+  query: async (query: string, limit = 5, conversation_history?: Array<{ role: 'user' | 'assistant'; content: string }>) => {
+    const response = await api.post('/memories/query', { query, limit, conversation_history });
     return response.data;
   },
 };

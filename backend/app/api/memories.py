@@ -280,11 +280,43 @@ async def query_memories(query_request: QueryRequest, db: AsyncSession = Depends
             "original_filename": memory.original_filename or "unknown",
         })
 
+    # DIAGNOSTIC LOGGING - candidates before Nemotron
+    candidate_summaries = []
+    for em in enriched_memories:
+        ocr_preview = (em.get("ocr_text", "") or "")[:300]
+        candidate_summaries.append({
+            "memory_id": em.get("memory_id"),
+            "distance": em.get("distance"),
+            "original_filename": em.get("original_filename"),
+            "ocr_preview": ocr_preview,
+        })
+    logger.info(
+        "query_candidates_before_nemotron",
+        user_query=query,
+        conversation_history_length=len(query_request.conversation_history),
+        conversation_history_last_5=query_request.conversation_history[-5:] if query_request.conversation_history else [],
+        candidate_memory_ids=[em.get("memory_id") for em in enriched_memories],
+        candidates=candidate_summaries,
+    )
+
     # Perform multimodal reasoning with Nemotron
-    answer, selected_memory_ids, sources, actions = await nemotron_service.reason(query, enriched_memories)
+    answer, selected_memory_ids, sources, actions = await nemotron_service.reason(
+        query, enriched_memories, query_request.conversation_history
+    )
+
+    # Check if this is a fallback response (empty selected_memory_ids but answer present)
+    is_fallback = answer is not None and len(selected_memory_ids) == 0
 
     if answer is None:
         raise HTTPException(status_code=503, detail="Reasoning service unavailable")
+
+    # Debug logging
+    logger.info(
+        "query_nemotron_result",
+        selected_memory_ids=selected_memory_ids,
+        selected_count=len(selected_memory_ids),
+        candidate_count=len(enriched_memories),
+    )
 
     # Deduplicate selected_memory_ids while preserving order
     seen = set()
@@ -299,6 +331,7 @@ async def query_memories(query_request: QueryRequest, db: AsyncSession = Depends
     for memory_id in unique_selected_ids:
         memory = next((m for m in memories if m.id == memory_id), None)
         if not memory:
+            logger.warning("selected_memory_not_found_in_candidates", memory_id=memory_id)
             continue
 
         source_results.append(
@@ -311,6 +344,12 @@ async def query_memories(query_request: QueryRequest, db: AsyncSession = Depends
                 uploaded_at=memory.created_at,
             )
         )
+
+    logger.info(
+        "query_response_built",
+        selected_memories_count=len(source_results),
+        selected_memory_ids=[m.memory_id for m in source_results],
+    )
 
     # Convert sources from agent format to Source schema
     source_objects = [
@@ -339,6 +378,8 @@ async def query_memories(query_request: QueryRequest, db: AsyncSession = Depends
         query=query,
         answer=answer,
         selected_memory_ids=unique_selected_ids,
+        selected_memories=source_results,
         sources=source_objects,
         actions=action_objects,
+        is_fallback=is_fallback,
     )
