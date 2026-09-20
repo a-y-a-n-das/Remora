@@ -12,6 +12,8 @@ from app.schemas import (
     QueryResponse,
     QueryResult,
     MemoryListItem,
+    Source,
+    Action,
 )
 from app.services import (
     generate_memory_id,
@@ -279,7 +281,7 @@ async def query_memories(query_request: QueryRequest, db: AsyncSession = Depends
         })
 
     # Perform multimodal reasoning with Nemotron
-    answer, selected_memory_ids = await nemotron_service.reason(query, enriched_memories)
+    answer, selected_memory_ids, sources, actions = await nemotron_service.reason(query, enriched_memories)
 
     if answer is None:
         raise HTTPException(status_code=503, detail="Reasoning service unavailable")
@@ -293,13 +295,13 @@ async def query_memories(query_request: QueryRequest, db: AsyncSession = Depends
             unique_selected_ids.append(mid)
 
     # Build source results - ONLY include memories selected by Nemotron as relevant
-    sources = []
+    source_results = []
     for memory_id in unique_selected_ids:
         memory = next((m for m in memories if m.id == memory_id), None)
         if not memory:
             continue
 
-        sources.append(
+        source_results.append(
             QueryResult(
                 memory_id=memory.id,
                 score=distance_map.get(memory.id, 0.0),
@@ -310,4 +312,33 @@ async def query_memories(query_request: QueryRequest, db: AsyncSession = Depends
             )
         )
 
-    return QueryResponse(query=query, answer=answer, sources=sources)
+    # Convert sources from agent format to Source schema
+    source_objects = [
+        Source(
+            title=s.get("title", ""),
+            url=s.get("url", ""),
+            description=s.get("description"),
+        )
+        for s in sources
+        if s.get("url")
+    ]
+
+    # Convert actions from agent format to Action schema
+    action_objects = [
+        Action(
+            type=a.get("type", "google_calendar"),
+            title=a.get("title", ""),
+            url=a.get("url", ""),
+            status=a.get("status", "prepared"),
+        )
+        for a in actions
+        if a.get("url")
+    ]
+
+    return QueryResponse(
+        query=query,
+        answer=answer,
+        selected_memory_ids=unique_selected_ids,
+        sources=source_objects,
+        actions=action_objects,
+    )

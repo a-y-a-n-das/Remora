@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, HttpUrl
-from typing import Optional, List
+from typing import Optional, List, Literal
 from datetime import datetime
 
 
@@ -96,7 +96,22 @@ class QueryResult(BaseModel):
     uploaded_at: Optional[datetime] = None
 
 
+class Source(BaseModel):
+    title: str
+    url: str
+    description: Optional[str] = None
+
+
+class Action(BaseModel):
+    type: Literal["google_calendar"]
+    title: str
+    url: str
+    status: Literal["prepared"]
+
+
 class QueryResponse(BaseModel):
     query: str
     answer: str
-    sources: List[QueryResult]
+    selected_memory_ids: List[str] = []
+    sources: List[Source] = []
+    actions: List[Action] = []

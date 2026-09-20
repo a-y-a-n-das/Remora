@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
+import json
 from app.services.nemotron import NemotronService
 
 
@@ -32,9 +33,16 @@ class TestNemotronService:
     @pytest.mark.asyncio
     async def test_reason_uses_configured_model(self, nemotron_service):
         """Test that the configured NEMOTRON_MODEL is passed to the API request."""
+        # Mock response that looks like a final answer (no tool calls)
         mock_response = MagicMock()
+        final_answer = json.dumps({
+            "answer": "Test answer",
+            "selected_memory_ids": ["mem_1"],
+            "sources": [],
+            "actions": []
+        })
         mock_response.json.return_value = {
-            "choices": [{"message": {"content": "Test answer"}}]
+            "choices": [{"message": {"content": final_answer, "tool_calls": []}}]
         }
         mock_response.raise_for_status = MagicMock()
 
@@ -52,10 +60,23 @@ class TestNemotronService:
             }
         ]
 
-        await nemotron_service.reason("test query", [memories[0]])
+        # Mock S3 image fetch to avoid real S3 calls
+        with patch("app.services.nemotron.get_async_s3_client") as mock_s3_client:
+            mock_s3 = AsyncMock()
+            mock_s3.get_object = AsyncMock(return_value={
+                "Body": AsyncMock(read=AsyncMock(return_value=b"fake_image_bytes"))
+            })
+            mock_s3.__aenter__ = AsyncMock(return_value=mock_s3)
+            mock_s3.__aexit__ = AsyncMock(return_value=None)
+            mock_s3_client.return_value = mock_s3
+
+            with patch("app.services.nemotron.get_settings") as mock_settings:
+                mock_settings.return_value = MagicMock(S3_BUCKET="test-bucket")
+
+                await nemotron_service.reason("test query", [memories[0]])
 
         # Verify the model passed to the API matches the configured model
-        mock_client.post.assert_awaited_once()
+        mock_client.post.assert_awaited()
         call_args = mock_client.post.call_args
         payload = call_args[1]["json"]
         assert payload["model"] == "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
@@ -63,27 +84,33 @@ class TestNemotronService:
     @pytest.mark.asyncio
     async def test_reason_no_memories(self, nemotron_service):
         """Test reasoning with no memories returns appropriate message."""
-        answer, selected = await nemotron_service.reason("What was the AWS invoice amount?", [])
+        answer, selected, sources, actions = await nemotron_service.reason("What was the AWS invoice amount?", [])
 
         assert answer is not None
         assert "couldn't find any relevant memories" in answer.lower()
         assert selected == []
+        assert sources == []
+        assert actions == []
 
     @pytest.mark.asyncio
     async def test_reason_missing_api_key(self, nemotron_service):
         nemotron_service.settings.NVIDIA_API_KEY = ""
-        answer, selected = await nemotron_service.reason("test query", [{"memory_id": "mem_1"}])
+        answer, selected, sources, actions = await nemotron_service.reason("test query", [{"memory_id": "mem_1"}])
 
         assert answer is None
         assert selected == []
+        assert sources == []
+        assert actions == []
 
     @pytest.mark.asyncio
     async def test_reason_missing_model(self, nemotron_service):
         nemotron_service.settings.NEMOTRON_MODEL = ""
-        answer, selected = await nemotron_service.reason("test query", [{"memory_id": "mem_1"}])
+        answer, selected, sources, actions = await nemotron_service.reason("test query", [{"memory_id": "mem_1"}])
 
         assert answer is None
         assert selected == []
+        assert sources == []
+        assert actions == []
 
     @pytest.mark.asyncio
     async def test_reason_http_error(self, nemotron_service):
@@ -96,10 +123,12 @@ class TestNemotronService:
         mock_client.post.return_value = mock_response
         nemotron_service.set_client(AsyncMock(post=AsyncMock(return_value=mock_response)))
 
-        answer, selected = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
+        answer, selected, sources, actions = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
 
         assert answer is None
         assert selected == []
+        assert sources == []
+        assert actions == []
 
     @pytest.mark.asyncio
     async def test_reason_timeout(self, nemotron_service):
@@ -107,10 +136,12 @@ class TestNemotronService:
         mock_client.post.side_effect = httpx.TimeoutException("Request timed out")
         nemotron_service.set_client(mock_client)
 
-        answer, selected = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
+        answer, selected, sources, actions = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
 
         assert answer is None
         assert selected == []
+        assert sources == []
+        assert actions == []
 
     @pytest.mark.asyncio
     async def test_reason_malformed_response_no_choices(self, nemotron_service):
@@ -120,12 +151,29 @@ class TestNemotronService:
 
         mock_client = AsyncMock()
         mock_client.post.return_value = mock_response
-        nemotron_service.set_client(AsyncMock(post=AsyncMock(return_value=mock_response)))
+        nemotron_service.set_client(mock_client)
 
-        answer, selected = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
+        # Mock S3 to avoid real S3 calls
+        with patch("app.services.nemotron.get_async_s3_client") as mock_s3_client:
+            mock_s3 = AsyncMock()
+            mock_s3.get_object = AsyncMock(return_value={
+                "Body": AsyncMock(read=AsyncMock(return_value=b"fake_image_bytes"))
+            })
+            mock_s3.__aenter__ = AsyncMock(return_value=mock_s3)
+            mock_s3.__aexit__ = AsyncMock(return_value=None)
+            mock_s3_client.return_value = mock_s3
 
-        assert answer is None
+            with patch("app.services.nemotron.get_settings") as mock_settings:
+                mock_settings.return_value = MagicMock(S3_BUCKET="test-bucket")
+
+                answer, selected, sources, actions = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
+
+        # When LLM returns malformed response, agent should return fallback answer
+        assert answer is not None
+        assert "couldn't find any relevant information" in answer.lower()
         assert selected == []
+        assert sources == []
+        assert actions == []
 
     @pytest.mark.asyncio
     async def test_reason_malformed_response_empty_choices(self, nemotron_service):
@@ -135,12 +183,28 @@ class TestNemotronService:
 
         mock_client = AsyncMock()
         mock_client.post.return_value = mock_response
-        nemotron_service.set_client(AsyncMock(post=AsyncMock(return_value=mock_response)))
+        nemotron_service.set_client(mock_client)
 
-        answer, selected = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
+        # Mock S3 to avoid real S3 calls
+        with patch("app.services.nemotron.get_async_s3_client") as mock_s3_client:
+            mock_s3 = AsyncMock()
+            mock_s3.get_object = AsyncMock(return_value={
+                "Body": AsyncMock(read=AsyncMock(return_value=b"fake_image_bytes"))
+            })
+            mock_s3.__aenter__ = AsyncMock(return_value=mock_s3)
+            mock_s3.__aexit__ = AsyncMock(return_value=None)
+            mock_s3_client.return_value = mock_s3
 
-        assert answer is None
+            with patch("app.services.nemotron.get_settings") as mock_settings:
+                mock_settings.return_value = MagicMock(S3_BUCKET="test-bucket")
+
+                answer, selected, sources, actions = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
+
+        assert answer is not None
+        assert "couldn't find any relevant information" in answer.lower()
         assert selected == []
+        assert sources == []
+        assert actions == []
 
     @pytest.mark.asyncio
     async def test_reason_malformed_response_missing_content(self, nemotron_service):
@@ -150,12 +214,28 @@ class TestNemotronService:
 
         mock_client = AsyncMock()
         mock_client.post.return_value = mock_response
-        nemotron_service.set_client(AsyncMock(post=AsyncMock(return_value=mock_response)))
+        nemotron_service.set_client(mock_client)
 
-        answer, selected = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
+        # Mock S3 to avoid real S3 calls
+        with patch("app.services.nemotron.get_async_s3_client") as mock_s3_client:
+            mock_s3 = AsyncMock()
+            mock_s3.get_object = AsyncMock(return_value={
+                "Body": AsyncMock(read=AsyncMock(return_value=b"fake_image_bytes"))
+            })
+            mock_s3.__aenter__ = AsyncMock(return_value=mock_s3)
+            mock_s3.__aexit__ = AsyncMock(return_value=None)
+            mock_s3_client.return_value = mock_s3
 
-        assert answer is None
+            with patch("app.services.nemotron.get_settings") as mock_settings:
+                mock_settings.return_value = MagicMock(S3_BUCKET="test-bucket")
+
+                answer, selected, sources, actions = await nemotron_service.reason("test query", [{"memory_id": "mem_1", "s3_key": "test.jpg"}])
+
+        assert answer is not None
+        assert "couldn't find any relevant information" in answer.lower()
         assert selected == []
+        assert sources == []
+        assert actions == []
 
     @pytest.mark.asyncio
     async def test_get_s3_image_base64_success(self, nemotron_service):

@@ -13,6 +13,13 @@ from .database import database_service, DatabaseService
 from .voyage import voyage_embedding_service, VoyageEmbeddingService
 from .s3_vectors import s3_vectors_service, S3VectorsService
 from .nemotron import nemotron_service, NemotronService
+from .tools import (
+    tool_registry,
+    Tool,
+    ToolRegistry,
+    register_default_tools,
+    execute_tool,
+)
 
 __all__ = [
     "generate_memory_id",
@@ -33,4 +40,9 @@ __all__ = [
     "S3VectorsService",
     "nemotron_service",
     "NemotronService",
+    "tool_registry",
+    "Tool",
+    "ToolRegistry",
+    "register_default_tools",
+    "execute_tool",
 ]

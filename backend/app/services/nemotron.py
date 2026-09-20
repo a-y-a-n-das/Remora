@@ -7,11 +7,12 @@ import httpx
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.services.storage import get_async_s3_client
-from app.core.config import get_settings
+from app.services.tools import tool_registry, execute_tool, register_default_tools
 
 logger = get_logger(__name__)
 
 NVIDIA_API_BASE = "https://integrate.api.nvidia.com/v1"
+MAX_TOOL_ITERATIONS = 5
 
 
 class NemotronService:
@@ -23,6 +24,8 @@ class NemotronService:
         self._system_prompt = (Path(__file__).parent.parent / "prompts" / "nemotron" / "system.txt").read_text(encoding="utf-8")
         self._user_template = (Path(__file__).parent.parent / "prompts" / "nemotron" / "user_template.txt").read_text(encoding="utf-8")
         self._memory_item_template = (Path(__file__).parent.parent / "prompts" / "nemotron" / "memory_item.txt").read_text(encoding="utf-8")
+        # Register default tools
+        register_default_tools()
 
     @property
     def client(self) -> httpx.AsyncClient:
@@ -125,26 +128,75 @@ class NemotronService:
 
         return messages
 
+    def _build_final_response_prompt(self) -> Dict[str, Any]:
+        """Build a prompt asking the LLM to produce the final JSON response."""
+        return {
+            "role": "user",
+            "content": "Now produce the final JSON response with the following structure:\n"
+            "{\n"
+            '  "answer": "Natural language answer to the user.",\n'
+            '  "selected_memory_ids": [],\n'
+            '  "sources": [],\n'
+            '  "actions": []\n'
+            "}\n\n"
+            "Requirements:\n"
+            "- answer: Natural language response. Never include memory IDs or internal IDs in the answer.\n"
+            "- selected_memory_ids: Only candidate memory IDs that genuinely contributed to the answer.\n"
+            "- sources: External sources from web research. Each: {title, url, description}.\n"
+            "- actions: User-facing actions. For Google Calendar: {type: 'google_calendar', title, url, status: 'prepared'}.\n"
+            "- Do not include internal IDs in answer text.\n"
+            "- Return valid JSON only."
+        }
+
+    async def _call_llm(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Call the LLM API and return the message."""
+        payload = {
+            "model": self.settings.NEMOTRON_MODEL,
+            "messages": messages,
+            "max_tokens": 4096,
+            "temperature": 0.3,
+            "top_p": 0.9,
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+
+        response = await self.client.post("/chat/completions", json=payload)
+        response.raise_for_status()
+
+        data = response.json()
+
+        choices = data.get("choices", [])
+        if not choices:
+            logger.error("nemotron_no_choices_returned", model=self.settings.NEMOTRON_MODEL)
+            return None
+
+        message = choices[0].get("message", {})
+        return message
+
     async def reason(
         self,
         query: str,
         memories: List[Dict[str, Any]],
-    ) -> Tuple[Optional[str], List[str]]:
-        """Perform multimodal reasoning with Nemotron on the given query and memories.
+    ) -> Tuple[Optional[str], List[str], List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Perform multimodal reasoning with Nemotron using tool-calling agent loop.
 
         Returns:
-            Tuple of (answer_text, selected_memory_ids).
-            If reasoning fails, returns (None, []).
-            If no memories are relevant, returns (answer, []).
+            Tuple of (answer, selected_memory_ids, sources, actions).
+            If reasoning fails, returns (None, [], [], []).
         """
         config_error = self._validate_config()
         if config_error:
             logger.error("nemotron_config_missing", error=config_error)
-            return None, []
+            return None, [], [], []
 
         if not memories:
             logger.info("nemotron_no_memories", query=query)
-            return "I couldn't find any relevant memories for your query.", []
+            return "I couldn't find any relevant memories for your query.", [], [], []
 
         start_time = time.time()
 
@@ -161,64 +213,145 @@ class NemotronService:
                     "image_b64": image_b64,
                 })
 
+            # Build initial messages
             messages = self._build_reasoning_prompt(query, enriched_memories)
+            tools = tool_registry.get_tool_definitions()
 
-            payload = {
-                "model": self.settings.NEMOTRON_MODEL,
-                "messages": messages,
-                "max_tokens": 2048,
-                "temperature": 0.3,
-                "top_p": 0.9,
-                "response_format": {"type": "json_object"},
-            }
+            # Tool-calling agent loop
+            tool_iterations = 0
+            selected_memory_ids = []
+            sources: List[Dict[str, Any]] = []
+            actions: List[Dict[str, Any]] = []
+            final_answer = None
 
-            response = await self.client.post("/chat/completions", json=payload)
-            response.raise_for_status()
+            while tool_iterations < MAX_TOOL_ITERATIONS:
+                tool_iterations += 1
 
-            data = response.json()
+                message = await self._call_llm(messages, tools)
+                if message is None:
+                    break
 
-            choices = data.get("choices", [])
-            if not choices:
-                logger.error("nemotron_no_choices_returned", model=self.settings.NEMOTRON_MODEL)
-                return None, []
+                # Check if LLM wants to call a tool
+                tool_calls = message.get("tool_calls", [])
 
-            message = choices[0].get("message", {})
-            content = message.get("content")
-            if content is None:
-                logger.error("nemotron_empty_content", response=data)
-                return None, []
+                if not tool_calls:
+                    # No tool calls - this should be the final response
+                    content = message.get("content", "")
+                    try:
+                        parsed = json.loads(content)
+                        final_answer = parsed.get("answer", "").strip()
+                        selected_memory_ids = parsed.get("selected_memory_ids", [])
+                        sources = parsed.get("sources", [])
+                        actions = parsed.get("actions", [])
 
-            # Parse JSON response
-            try:
-                parsed = json.loads(content)
-                answer = parsed.get("answer", "").strip()
-                selected_memory_ids = parsed.get("selected_memory_ids", [])
+                        # Validate selected_memory_ids
+                        if not isinstance(selected_memory_ids, list):
+                            selected_memory_ids = []
+                        else:
+                            selected_memory_ids = [str(mid) for mid in selected_memory_ids if isinstance(mid, (str, int))]
 
-                # Validate selected_memory_ids is a list of strings
-                if not isinstance(selected_memory_ids, list):
-                    selected_memory_ids = []
-                else:
-                    selected_memory_ids = [str(mid) for mid in selected_memory_ids if isinstance(mid, (str, int))]
+                        # Validate sources
+                        if not isinstance(sources, list):
+                            sources = []
 
-                # Deduplicate while preserving order
-                seen = set()
-                unique_ids = []
-                for mid in selected_memory_ids:
-                    if mid not in seen:
-                        seen.add(mid)
-                        unique_ids.append(mid)
-                selected_memory_ids = unique_ids
+                        # Validate actions
+                        if not isinstance(actions, list):
+                            actions = []
 
-                # Validate answer
-                if not answer:
-                    logger.warning("nemotron_empty_answer", response=content)
-                    answer = "I couldn't find any relevant information in the provided memories."
+                        break
+                    except json.JSONDecodeError:
+                        logger.warning("nemotron_non_json_response", content=content[:500])
+                        # Not a valid JSON, continue loop
+                        pass
 
-            except json.JSONDecodeError:
-                logger.warning("nemotron_non_json_response", content=content[:500])
-                # Fallback: treat as plain text answer, no memories selected
-                answer = content.strip()
+                # Execute tool calls
+                for tool_call in tool_calls:
+                    function = tool_call.get("function", {})
+                    tool_name = function.get("name")
+                    arguments_str = function.get("arguments", "{}")
+
+                    try:
+                        arguments = json.loads(arguments_str)
+                    except json.JSONDecodeError:
+                        arguments = {}
+
+                    logger.info(f"Tool call: {tool_name}", arguments=arguments)
+
+                    result = await execute_tool(tool_name, arguments)
+
+                    # Add tool result to messages
+                    messages.append({
+                        "role": "assistant",
+                        "content": message.get("content", ""),
+                        "tool_calls": [tool_call],
+                    })
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.get("id"),
+                        "content": json.dumps(result),
+                    })
+
+                    # Track results for final response
+                    if tool_name == "exa_web_search":
+                        results = result.get("results", [])
+                        for r in results:
+                            if r.get("url") and r not in sources:
+                                sources.append(r)
+                    elif tool_name == "exa_web_fetch":
+                        # Fetch results are already in conversation
+                        pass
+                    elif tool_name == "google_calendar_create_event":
+                        if "url" in result:
+                            actions.append({
+                                "type": "google_calendar",
+                                "title": result.get("title", ""),
+                                "url": result["url"],
+                                "status": "prepared",
+                            })
+
+            # If we exited loop without final answer, try to get one
+            if final_answer is None:
+                # Request final response
+                messages.append(self._build_final_response_prompt())
+                message = await self._call_llm(messages, None)
+                if message:
+                    content = message.get("content", "")
+                    try:
+                        parsed = json.loads(content)
+                        final_answer = parsed.get("answer", "").strip()
+                        selected_memory_ids = parsed.get("selected_memory_ids", [])
+                        sources = parsed.get("sources", [])
+                        actions = parsed.get("actions", [])
+                    except json.JSONDecodeError:
+                        final_answer = content.strip()
+
+            # Validate final answer
+            if not final_answer:
+                logger.warning("nemotron_empty_answer")
+                final_answer = "I couldn't find any relevant information in the provided memories."
+
+            # Validate selected_memory_ids
+            if not isinstance(selected_memory_ids, list):
                 selected_memory_ids = []
+            else:
+                selected_memory_ids = [str(mid) for mid in selected_memory_ids if isinstance(mid, (str, int))]
+
+            # Deduplicate while preserving order
+            seen = set()
+            unique_ids = []
+            for mid in selected_memory_ids:
+                if mid not in seen:
+                    seen.add(mid)
+                    unique_ids.append(mid)
+            selected_memory_ids = unique_ids
+
+            # Validate sources
+            if not isinstance(sources, list):
+                sources = []
+
+            # Validate actions
+            if not isinstance(actions, list):
+                actions = []
 
             duration_ms = int((time.time() - start_time) * 1000)
             logger.info(
@@ -228,12 +361,15 @@ class NemotronService:
                 query_length=len(query),
                 num_memories=len(memories),
                 selected_count=len(selected_memory_ids),
+                tool_iterations=tool_iterations,
+                sources_count=len(sources),
+                actions_count=len(actions),
             )
-            return answer, selected_memory_ids
+            return final_answer, selected_memory_ids, sources, actions
 
         except httpx.TimeoutException:
             logger.error("nemotron_timeout", model=self.settings.NEMOTRON_MODEL)
-            return None, []
+            return None, [], [], []
         except httpx.HTTPStatusError as e:
             status_code = e.response.status_code
             if status_code == 429:
@@ -251,10 +387,10 @@ class NemotronService:
                     status_code=status_code,
                     response=e.response.text[:500],
                 )
-            return None, []
+            return None, [], [], []
         except Exception as e:
             logger.error("nemotron_reasoning_failed", error=str(e))
-            return None, []
+            return None, [], [], []
 
 
 nemotron_service = NemotronService()

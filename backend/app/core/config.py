@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     # Worker processing
     PROCESSING_STALE_THRESHOLD_SECONDS: int = Field(default=600)
 
+    # Exa MCP
+    EXA_API_KEY: str = Field(default="")
+    EXA_API_BASE: str = Field(default="https://api.exa.ai")
+
     # NVIDIA Nemotron
     NVIDIA_API_KEY: str = Field(default="")
     NVIDIA_API_BASE: str = Field(default="https://integrate.api.nvidia.com/v1")
