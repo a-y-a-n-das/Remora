@@ -47,6 +47,13 @@ class TestS3VectorsService:
         assert "dimension mismatch" in str(exc_info.value)
         assert exc_info.value.retryable is False
 
+    def test_validate_dimension_none(self, s3_vectors_service):
+        with pytest.raises(S3VectorsError) as exc_info:
+            s3_vectors_service._validate_dimension(None)
+
+        assert "Vector cannot be None" in str(exc_info.value)
+        assert exc_info.value.retryable is False
+
     def test_validate_config_missing_bucket(self, s3_vectors_service):
         s3_vectors_service.bucket_name = ""
         error = s3_vectors_service._validate_config()
@@ -92,6 +99,13 @@ class TestS3VectorsService:
             await s3_vectors_service.upsert_vector("mem_abc123", vector)
         assert "dimension mismatch" in str(exc_info.value)
         assert exc_info.value.retryable is False
+
+    @pytest.mark.asyncio
+    async def test_upsert_vector_none_does_not_call_aws(self, s3_vectors_service):
+        with pytest.raises(S3VectorsError, match="Vector cannot be None"):
+            await s3_vectors_service.upsert_vector("mem_abc123", None)
+
+        s3_vectors_service.client.put_vectors.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_upsert_vector_missing_config(self, s3_vectors_service):
@@ -192,6 +206,13 @@ class TestS3VectorsService:
             await s3_vectors_service.query_vectors(query_vector, top_k=10)
         assert "dimension mismatch" in str(exc_info.value)
         assert exc_info.value.retryable is False
+
+    @pytest.mark.asyncio
+    async def test_query_vectors_none_does_not_call_aws(self, s3_vectors_service):
+        with pytest.raises(S3VectorsError, match="Vector cannot be None"):
+            await s3_vectors_service.query_vectors(None, top_k=10)
+
+        s3_vectors_service.client.query_vectors.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_query_vectors_missing_config(self, s3_vectors_service):

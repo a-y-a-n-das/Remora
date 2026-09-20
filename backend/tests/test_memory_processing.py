@@ -269,6 +269,29 @@ class TestProcessMemoryEvent:
                                     with pytest.raises(ProcessingError):
                                         await process_memory_event(event)
 
+    @pytest.mark.asyncio
+    async def test_process_memory_event_embedding_failure_does_not_index(self, event):
+        mock_memory = MagicMock()
+        mock_memory.processing_status = "uploaded"
+        mock_memory.processing_stage = "uploaded"
+
+        with patch("app.workers.processor.download_image_from_s3", new_callable=AsyncMock, return_value=b"fake_image_bytes"):
+            with patch.object(textract_service, "extract_text", return_value="AWS Invoice"):
+                with patch.object(voyage_embedding_service, "get_image_embedding", new_callable=AsyncMock, return_value=None):
+                    with patch.object(s3_vectors_service, "upsert_vector", new_callable=AsyncMock) as mock_s3v:
+                        with patch.object(database_service, "update_ocr_text", new_callable=AsyncMock, return_value=True):
+                            with patch.object(database_service, "update_memory_status", new_callable=AsyncMock) as mock_status:
+                                with patch.object(database_service, "get_memory", new_callable=AsyncMock, return_value=mock_memory):
+                                    with pytest.raises(ProcessingError) as exc_info:
+                                        await process_memory_event(event)
+
+        assert exc_info.value.retryable is True
+        mock_s3v.assert_not_awaited()
+        assert not any(
+            call.kwargs.get("processing_stage") == "indexing"
+            for call in mock_status.await_args_list
+        )
+
 
 class TestDuplicateMemoryIdProcessing:
     @pytest.mark.asyncio

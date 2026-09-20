@@ -23,7 +23,9 @@ class S3VectorsService:
         self.dimension = self.settings.S3_VECTORS_DIMENSION
         self.distance_metric = self.settings.S3_VECTORS_DISTANCE_METRIC
 
-    def _validate_dimension(self, vector: List[float]) -> None:
+    def _validate_dimension(self, vector: List[float] | None) -> None:
+        if vector is None:
+            raise S3VectorsError("Vector cannot be None", retryable=False)
         if len(vector) != self.dimension:
             raise S3VectorsError(
                 f"Vector dimension mismatch: expected {self.dimension}, got {len(vector)}",

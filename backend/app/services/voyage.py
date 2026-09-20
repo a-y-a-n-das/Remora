@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import time
 from typing import Optional, List
@@ -8,6 +9,8 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 VOYAGE_API_BASE = "https://api.voyageai.com/v1"
+TRANSIENT_STATUS_CODES = {408, 429}
+MAX_RETRY_DELAY_SECONDS = 60.0
 
 
 class VoyageEmbeddingService:
@@ -56,6 +59,87 @@ class VoyageEmbeddingService:
             return False
         return True
 
+    async def _post_with_retries(self, payload: dict, context: str) -> httpx.Response | None:
+        max_retries = max(0, self.settings.VOYAGE_MAX_RETRIES)
+        attempt = 0
+
+        while True:
+            try:
+                response = await self.client.post("/multimodalembeddings", json=payload)
+                response.raise_for_status()
+                return response
+            except httpx.HTTPStatusError as e:
+                status_code = e.response.status_code
+                retryable = status_code in TRANSIENT_STATUS_CODES or status_code >= 500
+                if not retryable or attempt >= max_retries:
+                    logger.error(
+                        "voyage_http_error",
+                        context=context,
+                        model=self.settings.VOYAGE_MODEL,
+                        status_code=status_code,
+                        response=e.response.text[:500],
+                    )
+                    return None
+
+                retry_after = e.response.headers.get("Retry-After")
+                delay = None
+                if retry_after:
+                    try:
+                        delay = float(retry_after)
+                    except (TypeError, ValueError):
+                        delay = None
+                if delay is None:
+                    delay = 2 ** attempt
+                delay = min(max(0.0, delay), MAX_RETRY_DELAY_SECONDS)
+                logger.warning(
+                    "voyage_transient_http_error_retrying",
+                    context=context,
+                    model=self.settings.VOYAGE_MODEL,
+                    status_code=status_code,
+                    attempt=attempt + 1,
+                    max_retries=max_retries,
+                    delay_seconds=delay,
+                )
+                await asyncio.sleep(delay)
+            except httpx.TimeoutException:
+                if attempt >= max_retries:
+                    logger.error("voyage_timeout", context=context, model=self.settings.VOYAGE_MODEL)
+                    return None
+                delay = min(2 ** attempt, MAX_RETRY_DELAY_SECONDS)
+                logger.warning(
+                    "voyage_timeout_retrying",
+                    context=context,
+                    model=self.settings.VOYAGE_MODEL,
+                    attempt=attempt + 1,
+                    max_retries=max_retries,
+                    delay_seconds=delay,
+                )
+                await asyncio.sleep(delay)
+            except httpx.RequestError as e:
+                if attempt >= max_retries:
+                    logger.error(
+                        "voyage_request_failed",
+                        context=context,
+                        model=self.settings.VOYAGE_MODEL,
+                        error=str(e),
+                    )
+                    return None
+                delay = min(2 ** attempt, MAX_RETRY_DELAY_SECONDS)
+                logger.warning(
+                    "voyage_request_retrying",
+                    context=context,
+                    model=self.settings.VOYAGE_MODEL,
+                    attempt=attempt + 1,
+                    max_retries=max_retries,
+                    delay_seconds=delay,
+                )
+                await asyncio.sleep(delay)
+            except Exception as e:
+                logger.error("voyage_embedding_failed", context=context, error=str(e))
+                return None
+
+            attempt += 1
+
     async def get_image_embedding(
         self, image_bytes: bytes, text: Optional[str] = None
     ) -> Optional[List[float]]:
@@ -78,8 +162,9 @@ class VoyageEmbeddingService:
                 "inputs": [{"content": content}],
             }
 
-            response = await self.client.post("/multimodalembeddings", json=payload)
-            response.raise_for_status()
+            response = await self._post_with_retries(payload, "image")
+            if response is None:
+                return None
 
             data = response.json()
 
@@ -105,17 +190,6 @@ class VoyageEmbeddingService:
             )
             return embedding
 
-        except httpx.TimeoutException:
-            logger.error("voyage_timeout", model=self.settings.VOYAGE_MODEL)
-            return None
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                "voyage_http_error",
-                model=self.settings.VOYAGE_MODEL,
-                status_code=e.response.status_code,
-                response=e.response.text[:500],
-            )
-            return None
         except Exception as e:
             logger.error("voyage_embedding_failed", error=str(e))
             return None
@@ -138,8 +212,9 @@ class VoyageEmbeddingService:
                 "inputs": [{"content": [{"type": "text", "text": text[:2048]}]}],
             }
 
-            response = await self.client.post("/multimodalembeddings", json=payload)
-            response.raise_for_status()
+            response = await self._post_with_retries(payload, "text")
+            if response is None:
+                return None
 
             data = response.json()
 
@@ -165,17 +240,6 @@ class VoyageEmbeddingService:
             )
             return embedding
 
-        except httpx.TimeoutException:
-            logger.error("voyage_timeout", model=self.settings.VOYAGE_MODEL)
-            return None
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                "voyage_http_error",
-                model=self.settings.VOYAGE_MODEL,
-                status_code=e.response.status_code,
-                response=e.response.text[:500],
-            )
-            return None
         except Exception as e:
             logger.error("voyage_embedding_failed", error=str(e))
             return None

@@ -416,11 +416,22 @@ def test_search_memories_voyage_failure(client, mock_db_session, mock_settings):
     """Test search when Voyage API fails."""
     with patch("app.api.memories.voyage_embedding_service.get_text_embedding", new_callable=AsyncMock) as mock_voyage:
         mock_voyage.return_value = None
+        with patch("app.api.memories.s3_vectors_service.query_vectors", new_callable=AsyncMock) as mock_s3v:
+            response = client.post("/memories/search", json={"query": "test", "limit": 10})
 
-        response = client.post("/memories/search", json={"query": "test", "limit": 10})
+            assert response.status_code == 503
+            assert "Failed to generate query embedding" in response.json()["error"]
+            mock_s3v.assert_not_awaited()
 
-        assert response.status_code == 503
-        assert "Failed to generate query embedding" in response.json()["error"]
+
+def test_query_endpoint_voyage_failure_does_not_search(client, mock_db_session, mock_settings):
+    with patch("app.api.memories.voyage_embedding_service.get_text_embedding", new_callable=AsyncMock, return_value=None):
+        with patch("app.api.memories.s3_vectors_service.query_vectors", new_callable=AsyncMock) as mock_s3v:
+            response = client.post("/memories/query", json={"query": "test", "limit": 5})
+
+            assert response.status_code == 503
+            assert "Failed to generate query embedding" in response.json()["error"]
+            mock_s3v.assert_not_awaited()
 
 
 def test_search_memories_s3_vectors_failure(client, mock_db_session, mock_settings):

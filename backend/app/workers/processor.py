@@ -147,6 +147,8 @@ async def process_memory_event(event: S3EventRecord) -> bool:
             await database_service.update_memory_status(db, memory_id, "processing", processing_stage="embedding")
 
             embedding = await voyage_embedding_service.get_image_embedding(image_bytes, ocr_text)
+            if embedding is None:
+                raise ProcessingError("Failed to generate image embedding", retryable=True)
 
             # Validate and update stage to indexing
             if not validate_stage_transition("embedding", "indexing", allow_recovery=recovery_mode):
