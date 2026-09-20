@@ -3,29 +3,77 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { RemoraIcon } from '../components/Logo';
 import { Input } from '../components/Input';
 import { useAppStore } from '../store';
-import { searchSuggestions } from '../data/mockData';
+
+function generateSuggestions(memories: Array<{ name: string; date: string }>): string[] {
+  if (memories.length === 0) {
+    return [
+      '"Find the AWS bill"',
+      '"Find the product I was looking at"',
+      '"Which receipt has this item?"',
+      '"Show me images from my trip"',
+    ];
+  }
+
+  const suggestions = new Set<string>();
+  
+  // Generate suggestions based on actual memory filenames and types
+  memories.forEach((mem) => {
+    const name = mem.name.toLowerCase();
+    
+    if (name.includes('bill') || name.includes('invoice') || name.includes('receipt')) {
+      suggestions.add(`"Find the ${mem.name.replace(/\.[^/.]+$/, '')}"`);
+    }
+    if (name.includes('trip') || name.includes('travel') || name.includes('flight')) {
+      suggestions.add(`"Show me images from ${mem.name.replace(/\.[^/.]+$/, '')}"`);
+    }
+    if (name.includes('product') || name.includes('unboxing') || name.includes('review')) {
+      suggestions.add(`"Find the product ${mem.name.replace(/\.[^/.]+$/, '')}"`);
+    }
+    if (name.includes('project') || name.includes('plan') || name.includes('design')) {
+      suggestions.add(`"Find the project ${mem.name.replace(/\.[^/.]+$/, '')}"`);
+    }
+  });
+
+  // Add generic useful suggestions
+  suggestions.add('"Find my latest receipts"');
+  suggestions.add('"Show me all screenshots"');
+  suggestions.add('"Find documents from last month"');
+  suggestions.add('"What did I save about AWS?"');
+
+  return Array.from(suggestions).slice(0, 8);
+}
 
 export function Home() {
-  const { startSearch } = useAppStore();
+  const { startSearch, items } = useAppStore();
   const [query, setQuery] = useState('');
   const [suggIdx, setSuggIdx] = useState(0);
   const [suggKey, setSuggKey] = useState(0);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Generate real suggestions from actual memories
+  useEffect(() => {
+    const suggestionsList = generateSuggestions(items);
+    setSuggestions(suggestionsList);
+  }, [items]);
 
   useEffect(() => {
     const timer = setInterval(() => {
-      setSuggIdx((i) => (i + 1) % searchSuggestions.length);
-      setSuggKey((k) => k + 1);
+      if (suggestions.length > 0) {
+        setSuggIdx((i) => (i + 1) % suggestions.length);
+        setSuggKey((k) => k + 1);
+      }
     }, 3500);
     return () => clearInterval(timer);
-  }, []);
+  }, [suggestions.length]);
 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
   const fillSuggestion = () => {
-    const clean = searchSuggestions[suggIdx].replace(/"/g, '');
+    if (suggestions.length === 0) return;
+    const clean = suggestions[suggIdx].replace(/"/g, '');
     setQuery(clean);
   };
 
@@ -124,13 +172,15 @@ export function Home() {
               transition={{ duration: 0.3 }}
               className="mt-5 flex items-center justify-center animate-pulse-soft"
             >
-              <button
-                onClick={fillSuggestion}
-                className="text-sm text-white/85 italic cursor-pointer px-2 py-1 rounded hover:bg-white/5 transition-colors"
-                style={{ fontStyle: 'italic' }}
-              >
-                {searchSuggestions[suggIdx]}
-              </button>
+              {suggestions.length > 0 && (
+                <button
+                  onClick={fillSuggestion}
+                  className="text-sm text-white/85 italic cursor-pointer px-2 py-1 rounded hover:bg-white/5 transition-colors"
+                  style={{ fontStyle: 'italic' }}
+                >
+                  {suggestions[suggIdx]}
+                </button>
+              )}
             </motion.div>
           </AnimatePresence>
         </div>

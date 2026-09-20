@@ -438,7 +438,8 @@ export function AllItems() {
           date: 'Just now',
           imageUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
           size: file.size,
-          status: 'uploaded',
+          status: 'processing',
+          processingStage: 'uploaded',
         };
         addItem(item);
         addInFlightMemory(serverMemoryId);
