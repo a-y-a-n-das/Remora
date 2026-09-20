@@ -190,7 +190,6 @@ async def trigger_processing(memory_id: str, db: AsyncSession = Depends(get_db))
         # No SQS configured - process directly
         from app.workers.s3_events import S3EventRecord
         from app.workers.processor import process_memory_event
-        from datetime import datetime, timezone
 
         event = S3EventRecord(
             message_id=f"trigger-{memory_id}",

@@ -912,3 +912,128 @@ def test_query_endpoint_conversation_history_session_isolation(client, mock_db_s
                     {"role": "user", "content": "previous session query"},
                     {"role": "assistant", "content": "previous session answer"}
                 ]
+
+
+def test_trigger_processing_endpoint_sqs_configured(client, mock_db_session):
+    """Test trigger-processing endpoint enqueues to SQS when configured."""
+    with patch("app.api.memories.voyage_embedding_service.get_text_embedding", new_callable=AsyncMock) as mock_voyage:
+        mock_voyage.return_value = [0.1] * 1024
+
+        with patch("app.api.memories.s3_vectors_service.query_vectors", new_callable=AsyncMock) as mock_s3v:
+            mock_s3v.return_value = [{"memory_id": "mem_1", "distance": 0.1}]
+
+            mock_memory = MagicMock(spec=Memory)
+            mock_memory.id = "mem_test123"
+            mock_memory.processing_status = "uploaded"
+            mock_memory.s3_key = "memories/mem_test123/original.jpg"
+            mock_memory.size_bytes = 1024
+
+            mock_result = MagicMock()
+            mock_result.scalar_one_or_none.return_value = mock_memory
+            mock_db_session.execute = AsyncMock(return_value=mock_result)
+
+            # Mock SQS client at the source module
+            with patch("app.core.aws_clients.get_async_sqs_client") as mock_sqs_client:
+                mock_sqs = AsyncMock()
+                mock_sqs.__aenter__ = AsyncMock(return_value=mock_sqs)
+                mock_sqs.__aexit__ = AsyncMock(return_value=None)
+                mock_sqs.send_message = AsyncMock()
+                mock_sqs_client.return_value = mock_sqs
+
+                # Patch get_settings at the module where it's used
+                with patch("app.api.memories.get_settings") as mock_settings:
+                    mock_settings_obj = MagicMock()
+                    mock_settings_obj.SQS_QUEUE_URL = "https://sqs.us-east-1.amazonaws.com/123/queue"
+                    mock_settings_obj.S3_BUCKET = "test-bucket"
+                    mock_settings_obj.AWS_REGION = "us-east-1"
+                    mock_settings.return_value = mock_settings_obj
+
+                    response = client.post("/memories/mem_test123/trigger-processing")
+
+                    assert response.status_code == 200
+                    data = response.json()
+                    assert data["status"] == "enqueued"
+                    assert data["memory_id"] == "mem_test123"
+                    mock_sqs.send_message.assert_awaited_once()
+
+
+def test_trigger_processing_endpoint_direct_processing(client, mock_db_session):
+    """Test trigger-processing endpoint processes directly when SQS not configured."""
+    with patch("app.api.memories.voyage_embedding_service.get_text_embedding", new_callable=AsyncMock) as mock_voyage:
+        mock_voyage.return_value = [0.1] * 1024
+
+        with patch("app.api.memories.s3_vectors_service.query_vectors", new_callable=AsyncMock) as mock_s3v:
+            mock_s3v.return_value = [{"memory_id": "mem_1", "distance": 0.1}]
+
+            mock_memory = MagicMock(spec=Memory)
+            mock_memory.id = "mem_test123"
+            mock_memory.processing_status = "uploaded"
+            mock_memory.s3_key = "memories/mem_test123/original.jpg"
+            mock_memory.size_bytes = 1024
+
+            mock_result = MagicMock()
+            mock_result.scalar_one_or_none.return_value = mock_memory
+            mock_db_session.execute = AsyncMock(return_value=mock_result)
+
+            # Mock process_memory_event at the source module
+            with patch("app.workers.processor.process_memory_event", new_callable=AsyncMock) as mock_process:
+                mock_process.return_value = True
+
+                # Patch get_settings at the module where it's used
+                with patch("app.api.memories.get_settings") as mock_settings:
+                    mock_settings_obj = MagicMock()
+                    mock_settings_obj.SQS_QUEUE_URL = ""  # Not configured
+                    mock_settings_obj.S3_BUCKET = "test-bucket"
+                    mock_settings_obj.AWS_REGION = "us-east-1"
+                    mock_settings.return_value = mock_settings_obj
+
+                    response = client.post("/memories/mem_test123/trigger-processing")
+
+                    assert response.status_code == 200
+                    data = response.json()
+                    assert data["status"] == "processed"
+                    assert data["memory_id"] == "mem_test123"
+                    mock_process.assert_awaited_once()
+
+
+def test_trigger_processing_endpoint_skips_non_uploaded(client, mock_db_session):
+    """Test trigger-processing skips memories not in uploaded status."""
+    with patch("app.api.memories.voyage_embedding_service.get_text_embedding", new_callable=AsyncMock) as mock_voyage:
+        mock_voyage.return_value = [0.1] * 1024
+
+        with patch("app.api.memories.s3_vectors_service.query_vectors", new_callable=AsyncMock) as mock_s3v:
+            mock_s3v.return_value = [{"memory_id": "mem_1", "distance": 0.1}]
+
+            mock_memory = MagicMock(spec=Memory)
+            mock_memory.id = "mem_test123"
+            mock_memory.processing_status = "ready"  # Not uploaded
+            mock_memory.s3_key = "memories/mem_test123/original.jpg"
+            mock_memory.size_bytes = 1024
+
+            mock_result = MagicMock()
+            mock_result.scalar_one_or_none.return_value = mock_memory
+            mock_db_session.execute = AsyncMock(return_value=mock_result)
+
+            response = client.post("/memories/mem_test123/trigger-processing")
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "skipped"
+            assert "ready" in data["reason"]
+
+
+def test_trigger_processing_endpoint_not_found(client, mock_db_session):
+    """Test trigger-processing returns 404 for non-existent memory."""
+    with patch("app.api.memories.voyage_embedding_service.get_text_embedding", new_callable=AsyncMock) as mock_voyage:
+        mock_voyage.return_value = [0.1] * 1024
+
+        with patch("app.api.memories.s3_vectors_service.query_vectors", new_callable=AsyncMock) as mock_s3v:
+            mock_s3v.return_value = [{"memory_id": "mem_1", "distance": 0.1}]
+
+            mock_result = MagicMock()
+            mock_result.scalar_one_or_none.return_value = None
+            mock_db_session.execute = AsyncMock(return_value=mock_result)
+
+            response = client.post("/memories/mem_nonexistent/trigger-processing")
+
+            assert response.status_code == 404
